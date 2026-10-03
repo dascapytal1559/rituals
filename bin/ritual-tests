@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+umask 077
+RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export PYTHONPATH="$RITUAL_ROOT/app"
+export PYTHONDONTWRITEBYTECODE=1
+case "$*" in
+  '') exec /usr/bin/python3 -m unittest discover -s "$RITUAL_ROOT/tests" -p 'test*.py' ;;
+  --smoke) exec /usr/bin/python3 -m unittest discover -s "$RITUAL_ROOT/tests" -p 'test_agent_handover.py' -v ;;
+  *) echo 'Usage: ritual-tests [--smoke]' >&2; exit 2 ;;
+esac

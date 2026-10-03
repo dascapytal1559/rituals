@@ -1,0 +1,15 @@
+# Personal data and runtime state stay out of git: the database, its backups and
+# exports, the write queue, logs, original evidence and the private server config.
+/data/
+/evidence/
+/logs/
+/queue/
+/config/
+*.sqlite3
+*.sqlite3-*
+__pycache__/
+.DS_Store
+/.agent-work/
+# This installation's operating notes and progress log (see AGENTS.md).
+/LOCAL.md
+/PROGRESS.local.md

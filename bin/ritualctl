@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+umask 077
+RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec /usr/bin/python3 "$RITUAL_ROOT/app/local_client.py" "$@"

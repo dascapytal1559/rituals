@@ -1,0 +1,9 @@
+{
+ "op": "ritual_put",
+ "date": "2026-09-30",
+ "patch": {
+  "journalling": true
+ },
+ "request_id": "fixture-pending-journalling",
+ "source_text": "Fictional message: \"journalled\". Received 2026-09-30T17:06:13Z. Contextual date: previous evening 2026-09-30. Actual journalling occurrence time: unknown."
+}

@@ -1,0 +1,6 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 8765,
+  "tailscale_hostname": "your-mac.your-tailnet.ts.net",
+  "owner_login": "you@example.com"
+}

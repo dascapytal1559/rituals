@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+umask 077
+RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec node "$RITUAL_ROOT/tools/screenshots.cjs" "$@"

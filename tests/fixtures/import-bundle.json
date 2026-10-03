@@ -1,0 +1,244 @@
+{
+ "format": "ritual-source-import-v1",
+ "documents": [
+  {
+   "id": "fixture-doc-1",
+   "path": "fixture/source-1.md",
+   "sha256": "9e4c77c1f2034100bc379fe874529a9da7d1233fd50711f10934104087021e13",
+   "content": "Fictional test source document 1.\n2026-08-24 midday: Fictional midday checkpoint: water and a short walk.\n"
+  },
+  {
+   "id": "fixture-doc-2",
+   "path": "fixture/source-2.md",
+   "sha256": "02559f9f691991c2bcf605e095b4a129d91f6028bf39eb2c84da38acc7cd11d3",
+   "content": "Fictional test source document 2.\n2026-08-24 evening: Fictional evening checkpoint: magnesium yes, protein yes.\n"
+  },
+  {
+   "id": "fixture-doc-3",
+   "path": "fixture/source-3.md",
+   "sha256": "48090be90289aa075282c33af2e281bd33267230b828a03f6c6895c515450274",
+   "content": "Fictional test source document 3.\n2026-09-15 evening: Fictional evening checkpoint: planks yes, protein yes, stretching yes.\n"
+  },
+  {
+   "id": "fixture-doc-4",
+   "path": "fixture/source-4.md",
+   "sha256": "4a921b663cf6fe4e88c6bae47bc4fcfa7b4eaf16eefdbf5f258d4eb1d5cd53a7",
+   "content": "Fictional test source document 4.\n2026-09-16 midday: Fictional midday checkpoint: travelling.\n"
+  },
+  {
+   "id": "fixture-doc-5",
+   "path": "fixture/source-5.md",
+   "sha256": "bc72c3939cfff4d5643057ed704eab08ea2c87240d799bce77a8f56be680e658",
+   "content": "Fictional test source document 5.\n2026-09-30 evening: Fictional evening checkpoint: planks 66 seconds.\n"
+  }
+ ],
+ "checkpoints": [
+  {
+   "id": "fixture-checkpoint-1",
+   "date": "2026-08-24",
+   "checkpoint": "midday",
+   "source_id": "fixture-doc-1",
+   "text": "Fictional midday checkpoint: water and a short walk."
+  },
+  {
+   "id": "fixture-checkpoint-2",
+   "date": "2026-08-24",
+   "checkpoint": "evening",
+   "source_id": "fixture-doc-2",
+   "text": "Fictional evening checkpoint: magnesium yes, protein yes."
+  },
+  {
+   "id": "fixture-checkpoint-3",
+   "date": "2026-09-15",
+   "checkpoint": "evening",
+   "source_id": "fixture-doc-3",
+   "text": "Fictional evening checkpoint: planks yes, protein yes, stretching yes."
+  },
+  {
+   "id": "fixture-checkpoint-4",
+   "date": "2026-09-16",
+   "checkpoint": "midday",
+   "source_id": "fixture-doc-4",
+   "text": "Fictional midday checkpoint: travelling."
+  },
+  {
+   "id": "fixture-checkpoint-5",
+   "date": "2026-09-30",
+   "checkpoint": "evening",
+   "source_id": "fixture-doc-5",
+   "text": "Fictional evening checkpoint: planks 66 seconds."
+  }
+ ],
+ "rituals": [
+  {
+   "date": "2026-08-23",
+   "checkins": [],
+   "magnesium": null,
+   "protein": null,
+   "stretching": true,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-08-24",
+   "checkins": [
+    "2026-08-24T15:01:00Z"
+   ],
+   "magnesium": true,
+   "protein": true,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-09-13",
+   "checkins": [],
+   "magnesium": true,
+   "protein": null,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-09-15",
+   "checkins": [],
+   "magnesium": null,
+   "protein": true,
+   "stretching": true,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-09-16",
+   "checkins": [],
+   "magnesium": null,
+   "protein": true,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-09-17",
+   "checkins": [],
+   "magnesium": null,
+   "protein": null,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-09-25",
+   "checkins": [],
+   "magnesium": true,
+   "protein": false,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-09-26",
+   "checkins": [],
+   "magnesium": null,
+   "protein": true,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": "Fictional note: topic placeholder."
+  },
+  {
+   "date": "2026-09-27",
+   "checkins": [],
+   "magnesium": null,
+   "protein": true,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": null,
+   "notes": null
+  },
+  {
+   "date": "2026-09-30",
+   "checkins": [
+    "2026-09-30T12:55:00Z",
+    "2026-09-30T15:26:00Z"
+   ],
+   "magnesium": true,
+   "protein": true,
+   "stretching": null,
+   "journalling": null,
+   "plank_seconds": 66,
+   "notes": null
+  }
+ ],
+ "workouts": [
+  {
+   "id": "fixture-workout-1",
+   "date": "2026-08-25",
+   "type": "walk",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-2",
+   "date": "2026-08-28",
+   "type": "gym push",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-3",
+   "date": "2026-08-31",
+   "type": "gym",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-4",
+   "date": "2026-09-03",
+   "type": "swim",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-5",
+   "date": "2026-09-06",
+   "type": "walk",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-6",
+   "date": "2026-09-10",
+   "type": "gym pull",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-7",
+   "date": "2026-09-14",
+   "type": "run",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-8",
+   "date": "2026-09-20",
+   "type": "walk",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-9",
+   "date": "2026-09-20",
+   "type": "gym legs",
+   "details": "Fictional free-text details."
+  },
+  {
+   "id": "fixture-workout-10",
+   "date": "2026-09-28",
+   "type": "run",
+   "details": "Fictional free-text details."
+  }
+ ],
+ "uncertainties": [
+  "Made-up test fixture: shaped like a source import, contains no real personal data."
+ ]
+}
