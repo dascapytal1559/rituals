@@ -1,4 +1,4 @@
-"""Shared local/browser theme; no account, network, or database preference."""
+"""Shared local/browser title-bar script: theme and ritual picker; no account, network, or database preference."""
 import base64
 import hashlib
 
@@ -46,6 +46,13 @@ SCRIPT='''(() => {
       apply();
     });
     apply();
+    // The title's native picker switches ritual pages; reset first so a page restored from history still names itself.
+    const picker = document.querySelector('#ritual-picker');
+    if (picker) picker.addEventListener('change', () => {
+      const target = picker.value;
+      for (const option of picker.options) option.selected = option.defaultSelected;
+      location.assign(target);
+    });
   }
   apply();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',bind,{once:true}); else bind();

@@ -35,6 +35,19 @@ def read_records(root, with_exceptions=False):
         exceptions = [dict(r) for r in db.execute('SELECT * FROM applicability_exceptions ORDER BY habit,start_date,id')] if with_exceptions else []
     return (rituals, workouts, exceptions) if with_exceptions else (rituals, workouts)
 
+def read_weekly(root):
+    """Weekly answers only, newest week first; nothing else from the store."""
+    database = Path(root)/'data/ritual.sqlite3'
+    with closing(sqlite3.connect(database.as_uri()+'?mode=ro', uri=True)) as db:
+        return [{'week_start':r[0], 'answer':r[1]} for r in db.execute('SELECT week_start,answer FROM weekly_reviews ORDER BY week_start DESC')]
+
+def week_view(entry):
+    start = dt.date.fromisoformat(entry['week_start']); end = start+dt.timedelta(days=6)
+    display = f'{start.strftime("%b")} {start.day} – ' + (str(end.day) if end.month == start.month else f'{end.strftime("%b")} {end.day}')
+    first = f'{start.strftime("%A")} {start.day} {start.strftime("%B")}' + ('' if end.year == start.year else start.strftime(' %Y'))
+    full = f'Week of {first} – {end.strftime("%A")} {end.day} {end.strftime("%B %Y")}'
+    return {'week_start':entry['week_start'], 'week_end':end.isoformat(), 'display':display, 'full':full, 'answer':entry['answer']}
+
 RECEIPT_STAMP = re.compile(r'\breceived(?:\s+at)?\s*:?\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))', re.I)
 
 def checkin_instant(value):
@@ -178,6 +191,54 @@ th.date,td.date{width:108px;padding-left:8px;line-height:1.3}
 }
 '''
 
+CSS += '''
+.ritual-switch{position:relative;display:inline-flex;align-items:center;gap:6px;min-width:0;border-radius:8px}
+.ritual-switch h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.picker-icon{display:inline-flex;flex:none;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;color:var(--subtle)}
+.picker-icon svg{width:18px;height:18px}
+.ritual-switch:hover .picker-icon{background:var(--hover);color:var(--ink)}
+.ritual-switch select{position:absolute;inset:0;width:100%;height:100%;min-width:0;min-height:0;margin:0;padding:0;border:0;opacity:0;cursor:pointer;font-size:16px;-webkit-appearance:none;appearance:none}
+.ritual-switch:has(select:focus-visible){outline:2px solid var(--green);outline-offset:3px}
+table.weekly-table{min-width:0}.scroll:has(.weekly-table){min-height:0}
+.weekly-table th.date,.weekly-table td.answer{vertical-align:top;padding-top:13px;padding-bottom:13px}
+.weekly-table td.answer{text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:21px}
+.weekly-table thead th.answer{text-align:left}
+@media screen and (max-width:760px){.ritual-switch{min-height:44px;gap:2px}.picker-icon{width:28px;height:28px}.weekly-table th.date,.weekly-table td.answer{padding-top:10px;padding-bottom:10px}.weekly-table td.answer{font-size:13px;line-height:20px}}
+@media print{.picker-icon{display:none}}
+'''
+
+# Each ritual is its own page; the title opens a native picker between them.
+RITUALS = (('daily','Daily rituals'), ('weekly','Weekly review'))
+LIVE_PATHS = {'daily':'/', 'weekly':'/weekly'}
+SNAPSHOT_FILES = {'daily':'ritual-dashboard.html', 'weekly':'weekly-review.html'}
+CHEVRON = '<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+
+def title_bar(current, links, snapshot):
+    options = ''.join(f'<option value="{escape(links[key])}"{" selected" if key == current else ""}>{escape(name)}</option>' for key, name in RITUALS)
+    return (f'<header><div class="ritual-switch"><h1>{escape(dict(RITUALS)[current])}</h1><span class="picker-icon">{CHEVRON}</span>'
+            f'<select id="ritual-picker" aria-label="Choose a ritual">{options}</select></div>'
+            f'<div class="header-actions">{snapshot}{theme.BUTTON}</div></header>')
+
+def page(current, csp, body, links=SNAPSHOT_FILES, snapshot=''):
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="{escape(csp)}"><title>{escape(dict(RITUALS)[current])}</title><script>{theme.SCRIPT}</script><style>{CSS}</style></head><body><main>
+{title_bar(current, links, snapshot)}
+{body}</main></body></html>'''
+
+STATIC_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-"+theme.HASH+"'; base-uri 'none'; form-action 'none'"
+WEEKLY_EMPTY = 'No weekly reviews recorded yet.'
+
+def weeks_label(count):
+    return f'{count} {"week" if count == 1 else "weeks"}'
+
+def weekly_header(count_text):
+    return f'<th class="date" scope="col">Week <span class="header-metric">(<span id="week-count" aria-live="polite">{count_text}</span>)</span></th><th class="answer" scope="col">Done this week</th>'
+
+def render_weekly(entries, generated_at):
+    stamp = generated_at.astimezone(TZ).strftime('%d %b %Y · %H:%M:%S %Z')
+    body = ''.join(f'<tr data-week="{escape(w["week_start"])}"><th scope="row" class="date"><time datetime="{escape(w["week_start"])}" title="{escape(w["full"])}" aria-label="{escape(w["full"])}">{escape(w["display"])}</time></th><td class="answer">{escape(w["answer"])}</td></tr>' for w in map(week_view, entries))
+    return page('weekly', STATIC_CSP, f'''<div class="sheet"><div class="scroll"><table class="weekly-table" aria-label="Weekly review answers"><thead><tr>{weekly_header(weeks_label(len(entries)))}</tr></thead><tbody>{body}</tbody></table><p class="empty"{' hidden' if entries else ''}>{WEEKLY_EMPTY}</p></div></div>
+''', snapshot=f'<p class="snapshot">Updated {escape(stamp)}</p>')
+
 def render(rows, generated_at, root, report=None):
     if report is None: report=status_report(rows,[],[],generated_at)
     derived={r['date']:r for r in report['records']}
@@ -207,14 +268,11 @@ def render(rows, generated_at, root, report=None):
         workout_days += int(closed and row['workout_count']>0)
         closed_days += int(closed)
         body.append(f'<tr data-date="{row["date"]}" data-period="{state["period"]}">'+''.join(cells)+'</tr>')
-    csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-"+theme.HASH+"'; base-uri 'none'; form-action 'none'"
     habit_headers=''.join(f'<th class="{"plank-col" if h=="planks" else "check-col"}" scope="col">{label} <span class="header-metric">(<span data-rate-habit="{h}" title="{report["by_habit"][h]["done"]} of {report["by_habit"][h]["applicable"]} applicable closed days">{rate(report["by_habit"][h])}</span>)</span></th>' for h,label in (('magnesium','Magnesium'),('protein','Protein'),('stretching','Stretches'),('planks','Plank'),('journalling','Journalling')))
     workout_rate = rate({'percentage':100*workout_days/closed_days if closed_days else None})
     workout_header = f'<th class="activities" scope="col">Workout <span class="header-metric">(<span data-rate-habit="workout" title="{workout_days} of {closed_days} closed days with a recorded workout">{workout_rate}</span>)</span></th>'
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="{escape(csp)}"><title>Daily rituals</title><script>{theme.SCRIPT}</script><style>{CSS}</style></head><body><main>
-<header><h1>Daily rituals</h1><div class="header-actions"><p class="snapshot">Updated {escape(stamp)}</p>{theme.BUTTON}</div></header>
-<div class="sheet"><div class="scroll"><table aria-label="Daily ritual and workout matrix"><thead><tr><th class="date" scope="col">Date <span class="header-metric">(<span id="visible-count" aria-live="polite">{len(rows)} {'day' if len(rows)==1 else 'days'}</span>)</span></th>{CHECKIN_HEADER}{habit_headers}{workout_header}</tr></thead><tbody>{''.join(body)}</tbody></table><p class="empty"{' hidden' if rows else ''}>No dates recorded yet.</p></div></div>
-</main></body></html>'''
+    return page('daily', STATIC_CSP, f'''<div class="sheet"><div class="scroll"><table aria-label="Daily ritual and workout matrix"><thead><tr><th class="date" scope="col">Date <span class="header-metric">(<span id="visible-count" aria-live="polite">{len(rows)} {'day' if len(rows)==1 else 'days'}</span>)</span></th>{CHECKIN_HEADER}{habit_headers}{workout_header}</tr></thead><tbody>{''.join(body)}</tbody></table><p class="empty"{' hidden' if rows else ''}>No dates recorded yet.</p></div></div>
+''', snapshot=f'<p class="snapshot">Updated {escape(stamp)}</p>')
 
 def generate(root=ROOT):
     root = Path(root).resolve()
@@ -227,19 +285,23 @@ def generate(root=ROOT):
         rows = matrix(rituals, workouts)
         stamp = dt.datetime.now(dt.timezone.utc)
         report = status_report(rituals,workouts,exceptions,stamp)
-        content = render(rows, stamp, root,report)
-        target = folder/'ritual-dashboard.html'
-        fd, temp = tempfile.mkstemp(prefix='.dashboard-', dir=folder)
-        try:
-            with os.fdopen(fd,'w') as stream:
-                stream.write(content); stream.flush(); os.fsync(stream.fileno())
-            os.replace(temp, target)
-            directory = os.open(folder, os.O_RDONLY)
-            try: os.fsync(directory)
-            finally: os.close(directory)
-        finally:
-            if os.path.exists(temp): os.unlink(temp)
-    return {'updated':True, 'path':str(target), 'generated_at':stamp.isoformat(), 'days':len(rows), 'workouts':len(workouts)}
+        weeks = read_weekly(root)
+        target, weekly = folder/SNAPSHOT_FILES['daily'], folder/SNAPSHOT_FILES['weekly']
+        write_view(folder, target, render(rows, stamp, root, report))
+        write_view(folder, weekly, render_weekly(weeks, stamp))
+    return {'updated':True, 'path':str(target), 'weekly_path':str(weekly), 'generated_at':stamp.isoformat(), 'days':len(rows), 'workouts':len(workouts), 'weeks':len(weeks)}
+
+def write_view(folder, target, content):
+    fd, temp = tempfile.mkstemp(prefix='.dashboard-', dir=folder)
+    try:
+        with os.fdopen(fd,'w') as stream:
+            stream.write(content); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temp, target)
+        directory = os.open(folder, os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        if os.path.exists(temp): os.unlink(temp)
 
 if __name__ == '__main__':
     os.umask(0o077)

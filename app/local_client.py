@@ -9,10 +9,9 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
-from ritual import Store, pack
+from ritual import Store, WRITES, pack
 
 ROOT = Path(__file__).resolve().parent.parent
-WRITES = {'ritual_put', 'workout_add', 'reminder_add', 'correct', 'reminder_mark', 'exception_add'}
 
 class StorageUnavailable(RuntimeError): pass
 
@@ -47,6 +46,20 @@ def init(root=ROOT):
         raise ValueError('A database already exists; --init only creates a new empty store')
     Store(database.parent).close()
     return call({'op': 'status'}, root)
+
+def migrate(root=ROOT):
+    """Apply the reviewed schema migration once, after its own backup; then refresh the views."""
+    root = Path(root)
+    if not (root/'data'/'ritual.sqlite3').is_file():
+        raise StorageUnavailable('Authoritative Mac database is unavailable; no empty replacement was created')
+    store = Store(root/'data')
+    try: result = store.migrate()
+    finally: store.close()
+    try:
+        from dashboard import generate
+        return {**result, 'dashboard': generate(root)}
+    except Exception as exc:
+        return {**result, 'dashboard': {'updated': False, 'error': str(exc), 'record_saved': True}}
 
 def atomic_json(path, value, no_replace=False):
     path = Path(path)
@@ -112,12 +125,13 @@ def main():
     os.umask(0o077)
     args = sys.argv[1:]
     if args == ['--init']: result = init()
+    elif args == ['--migrate']: result = migrate()
     elif args == ['--replay']: result = replay()
     elif args == ['--queue-status']:
         entries = [json.loads(p.read_text()) for p in (ROOT/'queue'/'pending').glob('*.json')]
         result = {'pending_count': len(entries), 'request_ids': [x['request']['request_id'] for x in entries]}
     else:
-        if args not in ([], ['--enqueue'], ['--queue-on-failure']): raise ValueError('Usage: ritualctl [--init | --enqueue | --replay | --queue-status | --queue-on-failure]')
+        if args not in ([], ['--enqueue'], ['--queue-on-failure']): raise ValueError('Usage: ritualctl [--init | --migrate | --enqueue | --replay | --queue-status | --queue-on-failure]')
         raw = sys.stdin.buffer.read(2_000_001)
         if len(raw)>2_000_000: raise ValueError('Request exceeds 2MB')
         req = json.loads(raw)

@@ -39,9 +39,11 @@ Send one JSON object on stdin to bin/ritualctl:
 {"op":"workouts","from":"2026-09-01","to":"2026-09-30","group_by":"month"}
 {"op":"reminders","mode":"review"}
 {"op":"reminders","mode":"due","as_of":"2026-10-05T08:00:00+11:00"}
+{"op":"weekly_reviews","from":"2026-09-01","to":"2026-10-31"}
+{"op":"history","entity":"weekly_reviews","id":"2026-09-28"}
 ```
 
-Use actual requested dates/as_of; omit as_of for current-time behavior. Rituals/workouts/reminders records return entity revision for corrections. Review includes stashed/outstanding reminders; due returns timed pending items whose time arrived. Neither sends a message or changes state. Status derives noon closure using Australia/Melbourne, including DST; raw null remains unchanged. The derived range is bounded to observed coverage. source/id retrieves original evidence privately.
+Use actual requested dates/as_of; omit as_of for current-time behavior. Rituals/workouts/reminders/weekly_reviews records return entity revision for corrections. Review includes stashed/outstanding reminders; due returns timed pending items whose time arrived. Neither sends a message or changes state. Status derives noon closure using Australia/Melbourne, including DST; raw null remains unchanged. The derived range is bounded to observed coverage. source/id retrieves original evidence privately.
 
 ## Writes: templates, not real reports
 
@@ -75,6 +77,13 @@ Workouts have no duration/distance/split/sets columns; type is open text. Multip
 ```json
 {"op":"reminder_add","record":{"text":"Exact task","due_at":"2026-10-05T08:00:00+11:00"},"request_id":"ORIGINAL_MESSAGE_ID:reminder:1","source_text":"Exact timing words, source ID, receipt and resolved Melbourne timing"}
 ```
+
+Weekly review answer (the reply to the weekly "What did you get done this week?" question):
+```json
+{"op":"weekly_put","week_start":"2026-09-28","answer":"Verbatim answer","request_id":"ORIGINAL_MESSAGE_ID:weekly","source_text":"Original words, source ID, receipt instant and which week it answers"}
+```
+
+`week_start` is the Monday of the Monday-to-Sunday week the answer reviews (a Sunday 2026-10-04 reply about that week uses 2026-09-28); any other day is rejected. Decide the week from context, as with after-midnight ritual dates, and disclose that in source_text. One record per week: a further answer for the same week is appended on a new line; changing earlier words is `correct` with entity=weekly_reviews, id=the Monday, patch={"answer":...}. Answers never go in ritual notes.
 
 Omit/null due_at for stashed. States pending/delivered/done/cancelled: delivery isn't completion. `reminder_mark` needs id,status,expected_revision,reason,request_id,source_text. Snooze is `correct` on reminders/due_at. Don't invent a date or replace explicit early timing with noon review. Applicability: exception_add record={habit,start_date,end_date,reason}, optional id, same provenance. Bounds inclusive; null start covers earlier dates. Overlap/positive-report conflicts require review. Corrections use entity=applicability_exceptions.
 
@@ -110,7 +119,7 @@ Commit when done. Never leave uncommitted or half-finished edits in the live fol
 
 ## UI development and service
 
-`dashboard.py` owns shared matrix/static view; `dashboard_web.py` live API projection/frontend; `dashboard_theme.py` theme; `dashboard_server.py` authorization/routes. Production DB and private config are not fixtures. Keep the existing privacy/display rules in AGENTS.md.
+`dashboard.py` owns shared matrix, weekly view, title bar/ritual picker and static views; `dashboard_web.py` live API projection/frontend; `dashboard_theme.py` theme; `dashboard_server.py` authorization/routes. Production DB and private config are not fixtures. Keep the existing privacy/display rules in AGENTS.md.
 
 ```sh
 bin/ritual-tests
@@ -131,7 +140,22 @@ Restart stops the existing named app/backend and bootstraps the unchanged author
 
 Native changes need `native/build.sh NEW_OUTPUT_APP_PATH STORE_ROOT` (fresh output path; STORE_ROOT is the live folder's absolute path); it builds/signs but doesn't install. Before replacing the installed app: preserve its full bundle in evidence, stop existing service, install the reviewed build at ~/Applications/Ritual Dashboard.app preserving bundle ID, then start/test. Never change privacy permissions to bypass a failure. The store root is explicit: build.sh writes STORE_ROOT into the bundle's Info.plist as `RitualStoreRoot`, and the app refuses to start without it. The LaunchAgent is ~/Library/LaunchAgents/local.ritual-dashboard.plist, label local.ritual-dashboard in gui/currentUID. Logs contain generic events under ~/Library/Logs/RitualDashboard. Installation-specific notes are in LOCAL.md.
 
-`bin/ritual-dashboard` regenerates the local HTML snapshot. That is independent from live service deployment. A returned dashboard.updated=false/record_saved=true means save succeeded: fix view only. Serve HTTPS 443 remains private→127.0.0.1:8765; no public Funnel or new write endpoints. API serves only safe dashboard fields, requires existing owner, and opens SQLite mode=ro. Never print config owner_login.
+Each ritual is its own page: Daily rituals at `/` (snapshot `data/views/ritual-dashboard.html`) and Weekly review at `/weekly` (snapshot `data/views/weekly-review.html`, API `/api/weekly`). The title's dropdown icon opens a native select over the title that switches between them; a new ritual is a new entry in `dashboard.RITUALS` with its page, route and API.
+
+`bin/ritual-dashboard` regenerates the local HTML snapshots. That is independent from live service deployment. A returned dashboard.updated=false/record_saved=true means save succeeded: fix view only. Serve HTTPS 443 remains private→127.0.0.1:8765; no public Funnel or new write endpoints. API serves only safe dashboard fields, requires existing owner, and opens SQLite mode=ro. Never print config owner_login.
+
+## Schema migrations
+
+A schema change that moves data is never applied implicitly. When new code needs a newer schema, every request except status, backup and export fails with "needs the reviewed migration" until it is applied, and status shows `"migration_required": true`. Apply it once, in a maintenance window with incoming reports held and the edit claim taken:
+
+```sh
+bin/ritualctl <<'JSON'
+{"op":"export","save":true}
+JSON
+bin/ritualctl --migrate
+```
+
+`--migrate` takes its own consistent backup first (path and sha256 in the result), applies the change in one transaction, audits every moved record in `changes`, regenerates the snapshots and is a no-op once applied. It refuses on a frozen backup copy. Version 3 adds `weekly_reviews` and moves every whole `Weekly: ...` line out of ritual notes into the week (Monday) of that ritual date, dropping the prefix; the result lists the dates and weeks moved. Restoring an older export into a current store applies the same move. A new store from `--init` starts at the current schema.
 
 ## Setting up the dashboard service (new installation)
 

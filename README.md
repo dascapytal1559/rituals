@@ -1,6 +1,6 @@
 # Rituals
 
-A small, local-first daily habit tracker that a chat assistant keeps for you. You tell your assistant what you did ("magnesium and protein done, 70 second plank", "checking in", "gym push: bench 3x8"); it logs that into a SQLite database on your Mac through one command-line tool, keeping your exact words as evidence. A read-only dashboard shows the result on your phone over your private Tailscale network.
+A small, local-first habit tracker (daily rituals plus a weekly review) that a chat assistant keeps for you. You tell your assistant what you did ("magnesium and protein done, 70 second plank", "checking in", "gym push: bench 3x8"); it logs that into a SQLite database on your Mac through one command-line tool, keeping your exact words as evidence. A read-only dashboard shows the result on your phone over your private Tailscale network.
 
 <p align="center">
   <img src="docs/screenshots/desktop-light.png" alt="Desktop dashboard, light theme: one row per day with check-in time, five habit columns with completion rates, and workouts" width="72%">
@@ -15,7 +15,7 @@ The screenshots show my real data. This is my personal setup, shared so you (or,
 you ──message──▶ your assistant ──JSON on stdin──▶ bin/ritualctl ──▶ data/ritual.sqlite3
                                                                       │  (records + audit log
                                                                       │   + automatic backups)
-                         data/views/ritual-dashboard.html ◀───────────┤  static snapshot
+                         data/views/*.html (daily, weekly) ◀──────────┤  static snapshots
 phone ──Tailscale Serve (private HTTPS)──▶ 127.0.0.1:8765 ◀───────────┘  live read-only API
                                            (native menu-bar app + LaunchAgent)
 ```
@@ -24,7 +24,7 @@ phone ──Tailscale Serve (private HTTPS)──▶ 127.0.0.1:8765 ◀───
 - **Unknown stays unknown.** Reports merge field by field, so "did my stretches" doesn't erase an earlier "magnesium yes", and a missing value stays null rather than becoming "no".
 - **Evenings close at noon.** A day's rituals stay open until noon the next day in the store's timezone, so after-midnight reports still count for the evening. After that, missing values are shown as not done. Open days and N/A periods are left out of the percentages.
 - **Offline queue.** If the database can't be written, requests can be queued (`--enqueue`) and replayed in order later (`--replay`), stopping at the first conflict.
-- **Read-only dashboard.** The live server only answers GET/HEAD for `/` and `/api/dashboard`, only on loopback, only for the one Tailscale login named in its config (Tailscale Serve adds that identity header), and opens SQLite read-only. Notes, source text, audit history and workout details never leave the API.
+- **Read-only dashboard.** The live server only answers GET/HEAD for its two pages, `/` (Daily rituals) and `/weekly` (Weekly review), and their `/api/dashboard` and `/api/weekly`, only on loopback, only for the one Tailscale login named in its config (Tailscale Serve adds that identity header), and opens SQLite read-only. Notes, source text, audit history and workout details never leave the API; the weekly page shows only each week's answer.
 
 ## What it tracks
 
@@ -34,6 +34,7 @@ phone ──Tailscale Serve (private HTTPS)──▶ 127.0.0.1:8765 ◀───
 | `workouts` | exactly `id, date, type, details`; `type` is free text, several per day allowed |
 | `reminders` | `text`, optional `due_at`, status pending/delivered/done/cancelled |
 | `applicability_exceptions` | date ranges where a habit doesn't apply (shown as N/A) |
+| `weekly_reviews` (one row per week) | `week_start` (the Monday), `answer` (what got done that week) |
 | `changes`, `source_documents`, `legacy_checkpoints`, `imports` | audit log and original evidence |
 
 ## Quickstart
@@ -65,7 +66,7 @@ The repo is set up so several AI agents (or sessions) can work on it one after a
 - `bin/ritual-agent claim OWNER SCOPE` is a cooperative lock for landing code or deploying in the live folder; logging needs no claim because the database's transactions, idempotent request IDs and revision checks already make sequential writers safe.
 - Code changes happen on a branch in a separate clone or worktree and land in the live folder as a fast-forward of `main`.
 
-An example of the kind of schedule an assistant can run on top of this (mine, roughly): at noon, review stashed reminders; at 22:00, a short check-in invitation and the evening checklist; on Sundays, ask "What did you get done this week?" and store the answer in notes.
+An example of the kind of schedule an assistant can run on top of this (mine, roughly): at noon, review stashed reminders; at 22:00, a short check-in invitation and the evening checklist; on Sundays, ask "What did you get done this week?" and record the answer with `weekly_put`.
 
 ## Adapting it
 
@@ -73,7 +74,7 @@ Things you will probably want to change:
 
 | What | Where |
 |---|---|
-| The habits | They are real columns, so changing them needs a schema migration. Every place a habit is named: `app/ritual.py` (the `rituals` table columns in `SCHEMA`, `BOOLS`, `FIELDS`, and the plank special cases in the applicability conflict checks), `app/applicability.py` (`HABITS` and the `CHECK` constraint in `TABLE_SQL`), `app/dashboard.py` (the `SELECT` in `read_records` and the per-habit cells in `render`), `app/dashboard_web.py` (the `HABITS` labels and the frontend `habits` array in `SCRIPT`), `tests/check_ui.cjs` (fixture row) and the tests. Planks are the one numeric habit (`plank_seconds`); the rest are true/false/null. |
+| The habits | They are real columns, so changing them needs a schema migration. Every place a habit is named: `app/ritual.py` (the `rituals` table columns in `SCHEMA`, `BOOLS`, `FIELDS`, and the plank special cases in the applicability conflict checks), `app/applicability.py` (`HABITS` and the `CHECK` constraint in `TABLE_SQL`), `app/dashboard.py` (the `SELECT` in `read_records` and the per-habit cells in `render`), `app/dashboard_web.py` (the `HABITS` labels and the frontend `habits` array in `DAILY_SCRIPT`), `tests/check_ui.cjs` (fixture row) and the tests. Planks are the one numeric habit (`plank_seconds`); the rest are true/false/null. |
 | Timezone | `Australia/Melbourne`: the `TZ` definitions in `app/ritual.py` and `app/applicability.py` (they load the bundled `app/Melbourne.tzif`, so they work on the macOS system Python without `tzdata`), and the `timezone` labels in `app/ritual.py`, `app/applicability.py` and `app/dashboard_web.py`. |
 | Port | `8765` in `app/dashboard_server.py` (config check) and `app/service_control.py`. |
 | Service names | LaunchAgent label `local.ritual-dashboard` (`app/service_control.py`), app path `~/Applications/Ritual Dashboard.app` (`app/service_control.py`), bundle ID in `native/Info.plist` and `native/build.sh`. |
@@ -87,8 +88,8 @@ Things you will probably want to change:
 |---|---|
 | `app/ritual.py`, `app/applicability.py` | SQLite transactions, validation, audit, applicability and date rules |
 | `app/local_client.py`, `bin/ritualctl` | Local writes, init, idempotency, durable queue and replay |
-| `app/dashboard.py` | Shared matrix, formatting and static snapshot |
-| `app/dashboard_web.py`, `app/dashboard_theme.py` | Live read projection, frontend and theme |
+| `app/dashboard.py` | Shared matrix, weekly view, title bar with the ritual picker, formatting and static snapshots |
+| `app/dashboard_web.py`, `app/dashboard_theme.py` | Live read projections, frontends, theme and picker script |
 | `app/dashboard_server.py` | Private read-only HTTP service (config in ignored `config/dashboard-server.json`) |
 | `app/service_control.py`, `bin/ritual-service` | Start/stop/status for the existing LaunchAgent |
 | `app/agent_work.py`, `bin/ritual-agent` | Cooperative edit claims between agents |

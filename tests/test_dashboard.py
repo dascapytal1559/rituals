@@ -110,8 +110,10 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('>66.7%</span>',page)
         self.assertIn('Date <span class="header-metric">',page)
         self.assertIn('>5 days</span>',page)
-        for removed in ('<select', 'id="month"', 'id="activity"', 'Ritual date'):
+        for removed in ('id="month"', 'id="activity"', 'Ritual date'):
             self.assertNotIn(removed,page)
+        self.assertEqual(page.count('<select'),1)
+        self.assertIn('<select id="ritual-picker"',page)
         self.assertEqual(original_completion,json.dumps(report['completion'],sort_keys=True))
         self.assertNotIn('workout',report['by_habit'])
 

@@ -39,10 +39,31 @@ CREATE TABLE imports(id TEXT PRIMARY KEY, imported_at TEXT NOT NULL, manifest TE
 CREATE TABLE changes(id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT NOT NULL UNIQUE, request_hash TEXT NOT NULL, recorded_at TEXT NOT NULL, action TEXT NOT NULL, entity TEXT NOT NULL, entity_id TEXT NOT NULL, before_json TEXT, after_json TEXT, source_text TEXT NOT NULL, reason TEXT, response_json TEXT NOT NULL);
 CREATE INDEX idx_changes_entity ON changes(entity,entity_id,id);
 """
-TABLES = ("rituals", "workouts", "reminders", "source_documents", "legacy_checkpoints", "imports", "changes", "applicability_exceptions")
+# Version 3: weekly review answers get their own table (one row per Monday-to-Sunday week).
+WEEKLY_SQL = """CREATE TABLE weekly_reviews(
+ week_start TEXT PRIMARY KEY CHECK(date(week_start) IS week_start AND strftime('%w',week_start)='1'),
+ answer TEXT NOT NULL CHECK(length(trim(answer))>0)
+);"""
+SCHEMA_VERSION = 3
+TABLES_BY_VERSION = {1: ("rituals", "workouts", "reminders", "source_documents", "legacy_checkpoints", "imports", "changes")}
+TABLES_BY_VERSION[2] = TABLES_BY_VERSION[1] + ("applicability_exceptions",)
+TABLES_BY_VERSION[3] = TABLES_BY_VERSION[2] + ("weekly_reviews",)
+TABLES = TABLES_BY_VERSION[SCHEMA_VERSION]
 BOOLS = ("magnesium", "protein", "stretching", "journalling")
 FIELDS = {"rituals": ("date", "checkins", *BOOLS, "plank_seconds", "notes"), "workouts": ("id", "date", "type", "details"), "reminders": ("id", "text", "due_at", "status")}
 FIELDS['applicability_exceptions'] = ('id','habit','start_date','end_date','reason')
+FIELDS['weekly_reviews'] = ('week_start','answer')
+KEYS = {'rituals': 'date', 'weekly_reviews': 'week_start'}
+WRITES = frozenset({'ritual_put', 'workout_add', 'reminder_add', 'correct', 'reminder_mark', 'exception_add', 'weekly_put'})
+WEEKLY_NOTE = re.compile(r'Weekly:\s*(\S.*?)\s*')
+MIGRATION_REQUIRED = "Schema version {} needs the reviewed migration: back up, then run bin/ritualctl --migrate (HANDOFF.md)"
+
+def key_of(entity):
+    return KEYS.get(entity, "id")
+
+def week_start(day):
+    day = dt.date.fromisoformat(day)
+    return (day - dt.timedelta(days=day.weekday())).isoformat()
 
 def now():
     return dt.datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
@@ -98,8 +119,11 @@ def validated(entity, row, complete=False):
         elif k == 'habit' and v not in HABITS: fail('Unknown habit')
         elif k in ('start_date','end_date'): out[k] = None if k=='start_date' and v is None else date(v)
         elif k == 'reason': out[k] = text(v,'reason',2000)
+        elif k == 'week_start':
+            if date(v) != week_start(v): fail("week_start must be the Monday that starts the Monday-to-Sunday week being reviewed")
+        elif k == 'answer': out[k] = text(v, 'answer', 30000)
     if complete:
-        required = {"rituals": {"date", "checkins"}, "workouts": {"id", "date", "type", "details"}, "reminders": {"id", "text", "due_at", "status"}, 'applicability_exceptions':set(FIELDS['applicability_exceptions'])}[entity]
+        required = {"rituals": {"date", "checkins"}, "workouts": {"id", "date", "type", "details"}, "reminders": {"id", "text", "due_at", "status"}, 'applicability_exceptions':set(FIELDS['applicability_exceptions']), 'weekly_reviews':set(FIELDS['weekly_reviews'])}[entity]
         if not required <= set(out): fail("Required record fields are missing")
         if entity=='applicability_exceptions': validate_exception(out,[])
     return out
@@ -129,8 +153,10 @@ class Store:
         self.db.execute("PRAGMA busy_timeout=30000")
         if not self.frozen: os.chmod(self.path, 0o600)
         if not self.db.execute("SELECT 1 FROM sqlite_schema WHERE name='schema_migrations'").fetchone():
-            self.db.executescript("BEGIN IMMEDIATE;\n" + SCHEMA + "\nCOMMIT;")
-            self.db.execute("INSERT INTO schema_migrations VALUES(1,?)", (now(),))
+            # A new store starts at the current schema; there is nothing to back up or move.
+            stamp = now()
+            self.db.executescript("BEGIN IMMEDIATE;\n" + SCHEMA + TABLE_SQL + WEEKLY_SQL
+                + "".join(f"\nINSERT INTO schema_migrations VALUES({v},'{stamp}');" for v in TABLES_BY_VERSION) + "\nCOMMIT;")
         versions = [r[0] for r in self.db.execute("SELECT version FROM schema_migrations ORDER BY version")]
         if versions==[1] and not self.frozen:
             self.backup()
@@ -143,9 +169,11 @@ class Store:
             except Exception:
                 self.db.execute('ROLLBACK'); raise
             versions = [r[0] for r in self.db.execute('SELECT version FROM schema_migrations ORDER BY version')]
-        if versions not in ([1],[1,2]): fail("Unsupported schema version; explicit migration required")
+        if versions not in ([1],[1,2],[1,2,3]): fail("Unsupported schema version; explicit migration required")
         self.schema_version = versions[-1]
-        self.table_names = TABLES if self.schema_version==2 else TABLES[:-1]
+        self.table_names = TABLES_BY_VERSION[self.schema_version]
+        # Version 3 moves data, so it never runs implicitly: until --migrate, only status, backup and export work.
+        self.migration_required = self.schema_version < SCHEMA_VERSION and not self.frozen
 
     def close(self): self.db.close()
 
@@ -161,8 +189,7 @@ class Store:
         return str(target)
 
     def get(self, entity, key):
-        pk = "date" if entity == "rituals" else "id"
-        return decode(entity, self.db.execute(f"SELECT * FROM {entity} WHERE {pk}=?", (key,)).fetchone())
+        return decode(entity, self.db.execute(f"SELECT * FROM {entity} WHERE {key_of(entity)}=?", (key,)).fetchone())
 
     def revision(self, entity, key):
         return self.db.execute("SELECT COALESCE(MAX(id),0) FROM changes WHERE entity=? AND entity_id=?", (entity, key)).fetchone()[0]
@@ -174,6 +201,61 @@ class Store:
 
     def counts(self):
         return {t: self.db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in self.table_names}
+
+    def record_change(self, request_id, request_hash, action, entity, key, before, after, source, reason, extra=None):
+        stamp = now()
+        cursor = self.db.execute("INSERT INTO changes(request_id,request_hash,recorded_at,action,entity,entity_id,before_json,after_json,source_text,reason,response_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (request_id, request_hash, stamp, action, entity, key, None if before is None else pack(before), pack(after), source, reason, "{}"))
+        response = {"record": after, "revision": cursor.lastrowid, "recorded_at": stamp, **(extra or {})}
+        self.db.execute("UPDATE changes SET response_json=? WHERE id=?", (pack(response), cursor.lastrowid))
+        return response
+
+    def migrate(self):
+        """Explicit, reviewed upgrade to the current schema; backs up first, idempotent once applied."""
+        if self.frozen: fail('Frozen backup copy: migrate the authoritative store, never this copy.')
+        if self.schema_version == SCHEMA_VERSION: return {"migrated": False, "schema_version": self.schema_version}
+        backup = self.backup()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            if [r[0] for r in self.db.execute("SELECT version FROM schema_migrations ORDER BY version")] != [1, 2]: fail("Schema changed during migration; reopen and retry")
+            self.db.execute(WEEKLY_SQL)
+            moved = self.move_weekly_notes("migration:3", "Schema migration 3")
+            self.db.execute("INSERT INTO schema_migrations VALUES(3,?)", (now(),))
+            self.db.execute("COMMIT")
+        except Exception:
+            if self.db.in_transaction: self.db.execute("ROLLBACK")
+            raise
+        previous, self.schema_version = self.schema_version, SCHEMA_VERSION
+        self.table_names, self.migration_required = TABLES, False
+        return {"migrated": True, "from_version": previous, "schema_version": self.schema_version, "backup": backup, "backup_sha256": sha(Path(backup).read_bytes()), "moved_weekly_answers": moved}
+
+    def move_weekly_notes(self, request_prefix, cause):
+        """Move whole "Weekly: ..." note lines into weekly_reviews, keyed by the Monday of the ritual date's week.
+
+        Runs inside the caller's transaction. The original words and their provenance stay in the earlier
+        rituals changes; each move is itself audited on both entities.
+        """
+        found, moved = {}, []
+        for row in self.db.execute("SELECT * FROM rituals WHERE notes LIKE '%Weekly:%' ORDER BY date").fetchall():
+            before = decode("rituals", row)
+            lines = before["notes"].split("\n")
+            answers = [m.group(1) for m in map(WEEKLY_NOTE.fullmatch, lines) if m]
+            if not answers: continue
+            week = week_start(before["date"])
+            after = {**before, "notes": "\n".join(line for line in lines if not WEEKLY_NOTE.fullmatch(line)) or None}
+            self.save("rituals", after, replacing=True)
+            source = f"{cause} moved the weekly answer stored as a 'Weekly:' line in the notes of ritual date {before['date']} into weekly_reviews {week}. Original words and provenance remain in the earlier changes for rituals {before['date']}."
+            self.record_change(f"{request_prefix}:rituals:{before['date']}", sha(pack(after)), "migrate", "rituals", before["date"], before, after, source, "Weekly answers have their own record")
+            found.setdefault(week, []).append((before["date"], answers))
+            moved.append({"date": before["date"], "week_start": week, "lines": len(answers)})
+        for week, entries in found.items():
+            before = self.get("weekly_reviews", week)
+            joined = "\n".join(answer for _, answers in entries for answer in answers)
+            after = validated("weekly_reviews", {"week_start": week, "answer": before["answer"] + "\n" + joined if before else joined}, complete=True)
+            self.save("weekly_reviews", after, replacing=before is not None)
+            dates = ", ".join(day for day, _ in entries)
+            source = f"{cause} moved this weekly answer out of the notes of ritual date {dates}. Original words and provenance remain in the earlier changes for rituals {dates}."
+            self.record_change(f"{request_prefix}:weekly_reviews:{week}", sha(pack(after)), "migrate", "weekly_reviews", week, before, after, source, "Weekly answers have their own record")
+        return moved
 
     def exceptions(self):
         if self.schema_version<2: return []
@@ -200,17 +282,19 @@ class Store:
         if not isinstance(req, dict): fail("Send one JSON object")
         op = req.get("op")
         self.frozen = self.frozen or (self.directory / 'FROZEN_BACKUP.json').exists()
-        if self.frozen and op in ('import', 'restore', 'ritual_put', 'workout_add', 'reminder_add', 'correct', 'reminder_mark', 'exception_add'):
+        if self.frozen and op in ('import', 'restore', *WRITES):
             fail('Frozen backup copy: writes go to the authoritative store. Do not sync back to this copy.')
+        if self.migration_required and op not in ("status", "backup", "export"):
+            fail(MIGRATION_REQUIRED.format(self.schema_version))
         if op == "status":
-            return {"schema_version": self.schema_version, "timezone": "Australia/Melbourne", "counts": self.counts(), "integrity": self.db.execute("PRAGMA integrity_check").fetchone()[0], "storage_role": 'frozen_backup' if self.frozen else 'authoritative', "scheduler_managed_externally": True}
+            return {"schema_version": self.schema_version, "migration_required": self.migration_required, "timezone": "Australia/Melbourne", "counts": self.counts(), "integrity": self.db.execute("PRAGMA integrity_check").fetchone()[0], "storage_role": 'frozen_backup' if self.frozen else 'authoritative', "scheduler_managed_externally": True}
         if op == "backup":
             path = self.backup()
             return {"backup": path, "sha256": sha(Path(path).read_bytes())}
         if op == "export": return self.export(bool(req.get("save", False)))
         if op == "import": return self.import_bundle(req)
         if op == "restore": return self.restore(req)
-        if op in ("rituals", "workouts"): return self.query(req)
+        if op in ("rituals", "workouts", "weekly_reviews"): return self.query(req)
         if op=='applicability_exceptions':
             return {'records':[{**r,'revision':self.revision('applicability_exceptions',r['id'])} for r in self.exceptions()]}
         if op=='ritual_status':
@@ -233,7 +317,7 @@ class Store:
             entity = req.get("entity")
             if entity not in FIELDS: fail("Unknown entity")
             return [dict(r) for r in self.db.execute("SELECT * FROM changes WHERE entity=? AND entity_id=? ORDER BY id", (entity, text(req.get("id"), "id", 180)))]
-        if op in ("ritual_put", "workout_add", "reminder_add", "correct", "reminder_mark", "exception_add"):
+        if op in WRITES:
             return self.mutate(req)
         fail("Unknown operation; arbitrary SQL and shell commands are not supported")
 
@@ -267,6 +351,13 @@ class Store:
                     elif k == "notes" and v: after[k] = "\n".join(filter(None, [after.get(k), v]))
                     elif before and after.get(k) is not None and after[k] != v: fail("Changing a recorded value requires correct with expected_revision and reason")
                     else: after[k] = v
+            elif op == "weekly_put":
+                # Like notes, a further answer for the same week is appended; changing earlier words needs correct.
+                entity = "weekly_reviews"
+                row = validated(entity, {"week_start": req.get("week_start"), "answer": req.get("answer")}, complete=True)
+                key = row["week_start"]
+                before = self.get(entity, key)
+                after = {**before, "answer": before["answer"] + "\n" + row["answer"]} if before else row
             elif op in ("workout_add", "reminder_add", 'exception_add'):
                 entity = {'workout_add':'workouts','reminder_add':'reminders','exception_add':'applicability_exceptions'}[op]
                 values = dict(req.get("record", {}))
@@ -287,15 +378,11 @@ class Store:
                 if type(req.get("expected_revision")) is not int or req["expected_revision"] != self.revision(entity, key): fail("Revision conflict; read current record before changing it")
                 reason = text(req.get("reason"), "reason", 2000)
                 patch = validated(entity, {"status": req.get("status")} if op == "reminder_mark" else req.get("patch"))
-                pk = "date" if entity == "rituals" else "id"
-                if not patch or pk in patch: fail("Cannot change record identity; correct fields only")
+                if not patch or key_of(entity) in patch: fail("Cannot change record identity; correct fields only")
                 after = {**before, **patch}
             self.check_applicability(entity,after)
             self.save(entity, after, replacing=before is not None)
-            stamp = now()
-            cursor = self.db.execute("INSERT INTO changes(request_id,request_hash,recorded_at,action,entity,entity_id,before_json,after_json,source_text,reason,response_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (request_id, request_hash, stamp, op, entity, key, None if before is None else pack(before), pack(after), source, reason, "{}"))
-            response = {"record": after, "revision": cursor.lastrowid, "recorded_at": stamp, "backup": backup, "replayed": False}
-            self.db.execute("UPDATE changes SET response_json=? WHERE id=?", (pack(response), cursor.lastrowid))
+            response = self.record_change(request_id, request_hash, op, entity, key, before, after, source, reason, {"backup": backup, "replayed": False})
             self.db.execute("COMMIT")
             return response
         except Exception:
@@ -307,12 +394,13 @@ class Store:
         start, end = date(req.get("from")), date(req.get("to"))
         if start > end or (dt.date.fromisoformat(end) - dt.date.fromisoformat(start)).days > 3660: fail("Invalid or excessive date range")
         params = [start, end]
-        where = "date BETWEEN ? AND ?"
+        column = "week_start" if entity == "weekly_reviews" else "date"
+        where = f"{column} BETWEEN ? AND ?"
         if entity == "workouts" and req.get("type") is not None:
             where += " AND type=?"
             params.append(text(req["type"], "type", 120))
-        rows = [decode(entity, r) for r in self.db.execute(f"SELECT * FROM {entity} WHERE {where} ORDER BY date" + (",id" if entity == "workouts" else ""), params)]
-        for r in rows: r["revision"] = self.revision(entity, r["date"] if entity == "rituals" else r["id"])
+        rows = [decode(entity, r) for r in self.db.execute(f"SELECT * FROM {entity} WHERE {where} ORDER BY {column}" + (",id" if entity == "workouts" else ""), params)]
+        for r in rows: r["revision"] = self.revision(entity, r[key_of(entity)])
         result = {"records": rows, "count": len(rows)}
         if entity == "workouts":
             result["active_days"] = len({r["date"] for r in rows})
@@ -405,7 +493,7 @@ class Store:
         try:
             tables = {}
             for table in self.table_names:
-                tables[table] = [decode(table, r) if table == "rituals" else dict(r) for r in self.db.execute(f"SELECT * FROM {table} ORDER BY " + ("date" if table == "rituals" else "id"))]
+                tables[table] = [decode(table, r) if table == "rituals" else dict(r) for r in self.db.execute(f"SELECT * FROM {table} ORDER BY {key_of(table)}")]
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")
@@ -421,10 +509,10 @@ class Store:
 
     def restore(self, req):
         snap = req.get("snapshot")
-        if not isinstance(snap, dict) or snap.get("format") != "ritual-database-export-v1" or snap.get("schema_version") not in (1,2): fail("Unsupported snapshot")
+        if not isinstance(snap, dict) or snap.get("format") != "ritual-database-export-v1" or snap.get("schema_version") not in TABLES_BY_VERSION: fail("Unsupported snapshot")
         if any(self.counts().values()): fail("Restore requires an empty store; originals will not be overwritten")
         tables = snap.get("tables", {})
-        expected=TABLES if snap['schema_version']==2 else TABLES[:-1]
+        expected=TABLES_BY_VERSION[snap['schema_version']]
         if set(tables) != set(expected) or sha(pack(tables)) != snap.get("data_sha256"): fail("Snapshot hash or tables mismatch")
         # Validate shape before parameterized inserts. Never execute SQL from an export.
         for table, rows in tables.items():
@@ -438,6 +526,8 @@ class Store:
             for table in TABLES:
                 for row in tables.get(table,[]): self.save(table, row)
             for row in self.exceptions(): self.check_applicability('applicability_exceptions',row)
+            # An older snapshot gets the same weekly move as an upgraded store, so its data matches this schema.
+            if snap['schema_version'] < 3: self.move_weekly_notes(f"restore:{snap['data_sha256']}:3", "Restoring a version " + str(snap['schema_version']) + " snapshot")
             self.db.execute("COMMIT")
         except Exception:
             self.db.execute("ROLLBACK")

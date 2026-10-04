@@ -118,7 +118,8 @@ class ApplicabilityStoreTests(unittest.TestCase):
 
     def test_version1_export_restores_without_losing_original_tables(self):
         snapshot=self.store.request({'op':'export'})
-        snapshot['schema_version']=1; snapshot['tables'].pop('applicability_exceptions')
+        snapshot['schema_version']=1
+        for table in ('applicability_exceptions','weekly_reviews'): snapshot['tables'].pop(table)
         snapshot['data_sha256']=sha(pack(snapshot['tables']))
         with tempfile.TemporaryDirectory() as folder:
             other=Store(folder)
@@ -127,7 +128,7 @@ class ApplicabilityStoreTests(unittest.TestCase):
                 self.assertEqual(restored['source_data_sha256'],snapshot['data_sha256'])
                 current=other.request({'op':'export'})['tables']
                 self.assertEqual({k:current[k] for k in snapshot['tables']},snapshot['tables'])
-                self.assertEqual(current['applicability_exceptions'],[])
+                self.assertEqual((current['applicability_exceptions'],current['weekly_reviews']),([],[]))
             finally:other.close()
 
     def test_migration_is_backed_up_once_and_keeps_existing_schema_columns(self):

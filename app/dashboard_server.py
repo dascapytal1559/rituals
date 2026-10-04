@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private Serve backend: one owner, one read-only page, loopback only."""
+"""Private Serve backend: one owner, read-only ritual pages, loopback only."""
 import datetime as dt
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,7 +10,7 @@ import re
 import sys
 
 import dashboard
-from dashboard_web import CSP, frontend, json_response
+from dashboard_web import CSP, frontend, json_response, weekly_response
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -37,11 +37,12 @@ class DashboardServer(ThreadingHTTPServer):
     allow_reuse_address = True
     request_queue_size = 16
 
-    def __init__(self,root,owner_login,hostname,port,renderer=json_response):
+    def __init__(self,root,owner_login,hostname,port,renderer=json_response,weekly_renderer=weekly_response):
         self.root = Path(root).resolve()
         self.owner_login = owner_login
         self.hostname = hostname
         self.renderer = renderer
+        self.weekly_renderer = weekly_renderer
         super().__init__(('127.0.0.1',port),DashboardHandler)
 
     def handle_error(self,request,client_address):
@@ -94,16 +95,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                  '127.0.0.1:'+str(self.server.server_port)}
         if len(hosts)!=1 or hosts[0] not in allowed:
             self.reply(400,b'Invalid request.\n');return
-        if self.path not in ('/','/api/dashboard'):
+        pages={'/':'daily','/weekly':'weekly'}
+        apis={'/api/dashboard':self.server.renderer,'/api/weekly':self.server.weekly_renderer}
+        if self.path not in pages and self.path not in apis:
             self.reply(404,b'Not found.\n');return
         if self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Length',[]) not in ([],['0']):
             self.reply(400,b'Invalid request.\n');return
         try:
-            content=frontend() if self.path=='/' else self.server.renderer(self.server.root)
+            content=frontend(pages[self.path]) if self.path in pages else apis[self.path](self.server.root)
         except Exception:
             print('dashboard_render_failed',file=sys.stderr,flush=True)
             self.reply(503,b'Dashboard temporarily unavailable.\n');return
-        self.reply(200,content,'text/html; charset=utf-8' if self.path=='/' else 'application/json; charset=utf-8')
+        self.reply(200,content,'text/html; charset=utf-8' if self.path in pages else 'application/json; charset=utf-8')
 
     do_GET = read_page
     do_HEAD = read_page

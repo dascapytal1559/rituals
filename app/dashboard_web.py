@@ -1,4 +1,6 @@
-"""Dashboard-only API projection and frontend; source records are never exposed."""
+"""Dashboard-only API projections and frontends; source records are never exposed.
+
+Daily rituals show derived habit cells; the weekly review shows only each week's answer text."""
 import base64
 import datetime as dt
 import hashlib
@@ -42,16 +44,42 @@ def dashboard_data(root,as_of=None):
       'timezone':'Australia/Melbourne','count':len(rows),'rates':rates,'rows':rows}
 
 
-SCRIPT='''const habits = ['magnesium','protein','stretching','planks','journalling'];
-const body = document.querySelector('tbody');
+def weekly_data(root,as_of=None):
+    stamp=as_of or dt.datetime.now(dt.timezone.utc)
+    weeks=[dashboard.week_view(entry) for entry in dashboard.read_weekly(root)]
+    return {'generated_at':stamp.isoformat(),'updated_display':stamp.astimezone(dashboard.TZ).strftime('%d %b %Y · %H:%M:%S %Z'),
+      'timezone':'Australia/Melbourne','count':len(weeks),'weeks':weeks}
+
+
+# Shared by both pages: text-only DOM building and a refresh on load, on return to the tab and each visible minute.
+LOADER='''const body = document.querySelector('tbody');
 const message = document.querySelector('#message');
-let loading = false;
 function element(tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
   if (className) node.className = className;
   return node;
 }
+function load(url, render) {
+  let loading = false;
+  async function refresh() {
+    if (loading) return;
+    loading = true;
+    try {
+      const response = await fetch(url, {cache:'no-store',credentials:'same-origin'});
+      if (!response.ok) throw new Error('Unavailable');
+      render(await response.json());
+    } catch (_) {
+      message.textContent = 'Dashboard unavailable. Last loaded values may be out of date. Refresh to retry.';
+      message.hidden = false;
+    } finally { loading = false; }
+  }
+  refresh();
+  setInterval(() => { if (!document.hidden) refresh(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+}
+'''
+DAILY_SCRIPT=LOADER+'''const habits = ['magnesium','protein','stretching','planks','journalling'];
 function render(data) {
   const fragment = document.createDocumentFragment();
   for (const row of data.rows) {
@@ -98,32 +126,43 @@ function render(data) {
   document.querySelector('#updated').textContent = 'Updated '+data.updated_display;
   message.textContent = data.count ? '' : 'No dates recorded yet.';message.hidden = data.count !== 0;
 }
-async function refresh() {
-  if (loading) return;
-  loading = true;
-  try {
-    const response = await fetch('/api/dashboard', {cache:'no-store',credentials:'same-origin'});
-    if (!response.ok) throw new Error('Unavailable');
-    render(await response.json());
-  } catch (_) {
-    message.textContent = 'Dashboard unavailable. Last loaded values may be out of date. Refresh to retry.';
-    message.hidden = false;
-  } finally { loading = false; }
+load('/api/dashboard', render);'''
+WEEKLY_SCRIPT=LOADER+'''function render(data) {
+  const fragment = document.createDocumentFragment();
+  for (const week of data.weeks) {
+    const tr = element('tr');
+    const date = element('th', undefined, 'date'); date.scope = 'row';
+    const time = element('time', week.display); time.dateTime = week.week_start;
+    time.title = week.full; time.setAttribute('aria-label', week.full); date.append(time);
+    tr.append(date, element('td', week.answer, 'answer'));
+    fragment.append(tr);
+  }
+  body.replaceChildren(fragment);
+  document.querySelector('#week-count').textContent = data.count+' '+(data.count === 1 ? 'week' : 'weeks');
+  document.querySelector('#updated').textContent = 'Updated '+data.updated_display;
+  message.textContent = data.count ? '' : '''+json.dumps(dashboard.WEEKLY_EMPTY)+''';message.hidden = data.count !== 0;
 }
-refresh();
-setInterval(() => { if (!document.hidden) refresh(); }, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });'''
-SCRIPT_HASH=base64.b64encode(hashlib.sha256(SCRIPT.encode()).digest()).decode()
-CSP="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-"+SCRIPT_HASH+"' 'sha256-"+theme.HASH+"'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+load('/api/weekly', render);'''
+SCRIPTS={'daily':DAILY_SCRIPT,'weekly':WEEKLY_SCRIPT}
+def script_hash(script):
+    return base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+CSP="default-src 'none'; style-src 'unsafe-inline'; script-src "+' '.join(f"'sha256-{script_hash(x)}'" for x in (*SCRIPTS.values(),theme.SCRIPT))+"; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+LOADING='<p class="empty" id="message" role="status">Loading dashboard…</p>'
 
 
-def frontend():
-    headers=''.join(f'<th class="{"plank-col" if h=="planks" else "check-col"}" scope="col">{label}<span class="header-metric">(<span data-rate="{h}">—</span>)</span></th>' for h,label in HABITS)
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta http-equiv="Content-Security-Policy" content="{dashboard.escape(CSP)}"><title>Daily rituals</title><script>{theme.SCRIPT}</script><style>{dashboard.CSS}</style></head><body><main>
-<header><h1>Daily rituals</h1><div class="header-actions"><p class="snapshot" id="updated">Updated —</p>{theme.BUTTON}</div></header>
-<div class="sheet"><div class="scroll"><table aria-label="Daily ritual and workout matrix"><thead><tr><th class="date" scope="col">Date<span class="header-metric">(<span id="day-count">—</span>)</span></th>{dashboard.CHECKIN_HEADER}{headers}<th class="activities" scope="col">Workout<span class="header-metric">(<span data-rate="workout">—</span>)</span></th></tr></thead><tbody></tbody></table><p class="empty" id="message" role="status">Loading dashboard…</p></div></div>
-</main><script>{SCRIPT}</script></body></html>'''.encode('utf-8')
+def frontend(ritual='daily'):
+    if ritual=='daily':
+        headers=''.join(f'<th class="{"plank-col" if h=="planks" else "check-col"}" scope="col">{label}<span class="header-metric">(<span data-rate="{h}">—</span>)</span></th>' for h,label in HABITS)
+        table=f'<table aria-label="Daily ritual and workout matrix"><thead><tr><th class="date" scope="col">Date<span class="header-metric">(<span id="day-count">—</span>)</span></th>{dashboard.CHECKIN_HEADER}{headers}<th class="activities" scope="col">Workout<span class="header-metric">(<span data-rate="workout">—</span>)</span></th></tr></thead><tbody></tbody></table>'
+    else:
+        table=f'<table class="weekly-table" aria-label="Weekly review answers"><thead><tr>{dashboard.weekly_header("—")}</tr></thead><tbody></tbody></table>'
+    body=f'<div class="sheet"><div class="scroll">{table}{LOADING}</div></div>\n<script>{SCRIPTS[ritual]}</script>'
+    return dashboard.page(ritual,CSP,body,dashboard.LIVE_PATHS,'<p class="snapshot" id="updated">Updated —</p>').encode('utf-8')
 
 
 def json_response(root):
     return json.dumps(dashboard_data(root),ensure_ascii=False,allow_nan=False).encode('utf-8')
+
+
+def weekly_response(root):
+    return json.dumps(weekly_data(root),ensure_ascii=False,allow_nan=False).encode('utf-8')

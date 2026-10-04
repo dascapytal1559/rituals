@@ -31,7 +31,7 @@ class ServerTests(unittest.TestCase):
   for identity in (None,'other@example.invalid','OWNER@example.invalid','', 'owner@example.invalid,other@example.invalid'):
    status,headers,body=self.request(identity=identity)
    self.assertEqual(status,403);self.assertNotIn(b'Daily ritual',body)
-   self.assertEqual(self.request(path='/api/dashboard',identity=identity)[0],403)
+   for path in ('/api/dashboard','/weekly','/api/weekly'):self.assertEqual(self.request(path=path,identity=identity)[0],403)
   status,headers,body=self.request()
   self.assertEqual(status,200);self.assertIn(b'Daily ritual',body)
   self.assertEqual(headers['Cache-Control'],'no-store')
@@ -41,7 +41,7 @@ class ServerTests(unittest.TestCase):
    req=('GET / HTTP/1.0\r\nHost: 127.0.0.1:'+str(self.server.server_port)+'\r\nTailscale-User-Login: owner@example.invalid\r\nTailscale-User-Login: owner@example.invalid\r\n\r\n').encode()
    sock.sendall(req);self.assertIn(b'403',sock.recv(1024).split(b'\r\n')[0])
  def test_no_file_paths_queries_or_write_methods(self):
-  for path in ('/data/ritual.sqlite3','/../AGENTS.md','/%2e%2e/config/dashboard-server.json','/?download=1','/evidence/','//data/ritual.sqlite3','/api/rituals'):
+  for path in ('/weekly/','/weekly?x=1','/api/weekly/','/daily','/data/ritual.sqlite3','/../AGENTS.md','/%2e%2e/config/dashboard-server.json','/?download=1','/evidence/','//data/ritual.sqlite3','/api/rituals'):
    self.assertEqual(self.request(path=path)[0],404,path)
   for method in ('POST','PUT','PATCH','DELETE','OPTIONS','TRACE','CONNECT'):
    status,headers,body=self.request(method=method)
@@ -62,6 +62,23 @@ class ServerTests(unittest.TestCase):
   page=self.request()[2]
   self.assertIn(b'width=device-width',page);self.assertIn(b'@media(max-width:760px)',page)
   self.assertIn(b'overflow:auto',page);self.assertIn(b'position:sticky',page)
+ def test_weekly_page_and_answers_only_api(self):
+  status,headers,body=self.request(path='/weekly')
+  self.assertEqual(status,200);self.assertIn(b'<title>Weekly review</title>',body);self.assertEqual(headers['Content-Type'],'text/html; charset=utf-8')
+  self.assertEqual(json.loads(self.request(path='/api/weekly')[2])['count'],0)
+  self.store.request({'op':'ritual_put','date':'2026-09-27','patch':{'notes':'Fictional private note'},'request_id':'isolated-note','source_text':'Test fixture only'})
+  self.store.request({'op':'weekly_put','week_start':'2026-09-21','answer':'Fictional weekly answer','request_id':'isolated-weekly','source_text':'Test fixture only'})
+  status,headers,body=self.request(path='/api/weekly')
+  self.assertEqual((status,headers['Content-Type']),(200,'application/json; charset=utf-8'))
+  self.assertEqual([w['answer'] for w in json.loads(body)['weeks']],['Fictional weekly answer'])
+  self.assertNotIn(b'Fictional private',body);self.assertNotIn(b'Test fixture',body)
+  self.assertNotIn(b'Fictional private',self.request(path='/api/dashboard')[2])
+  self.assertFalse((self.root/'data/views').exists())
+ def test_weekly_errors_do_not_leak_local_data(self):
+  def fail(root):raise RuntimeError('private weekly answer and local path')
+  self.server.weekly_renderer=fail
+  status,headers,body=self.request(path='/api/weekly')
+  self.assertEqual(status,503);self.assertNotIn(b'private',body)
  def test_database_opened_read_only(self):
   original=sqlite3.connect;seen=[]
   def checked(database_uri,*args,**kwargs):
@@ -69,8 +86,10 @@ class ServerTests(unittest.TestCase):
    with self.assertRaises(sqlite3.OperationalError):db.execute('CREATE TABLE unauthorized_write(x)')
    db.rollback()
    seen.append(True);return db
-  with patch('dashboard.sqlite3.connect',side_effect=checked):self.assertEqual(self.request(path='/api/dashboard')[0],200)
-  self.assertEqual(seen,[True])
+  with patch('dashboard.sqlite3.connect',side_effect=checked):
+   self.assertEqual(self.request(path='/api/dashboard')[0],200)
+   self.assertEqual(self.request(path='/api/weekly')[0],200)
+  self.assertEqual(seen,[True,True])
  def test_errors_do_not_leak_local_data(self):
   def fail(root):raise RuntimeError('private raw health source and local path')
   self.server.renderer=fail
