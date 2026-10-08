@@ -7,13 +7,13 @@ import { reject, type RequiresReview } from "./errors.ts";
 
 const NODE_MAJOR = Number(process.versions.node.split(".")[0]);
 
-export interface RunOptions {
+export interface RunOptions<E> {
   readonly indent?: number;
   /** Turns a typed failure into the JSON object printed on stdout. */
-  readonly onError: (error: unknown) => unknown;
+  readonly onError: (error: E) => unknown;
 }
 
-export const runCli = <A, E>(program: Effect.Effect<A, E>, options: RunOptions): void => {
+export const runCli = <A, E>(program: Effect.Effect<A, E>, options: RunOptions<NoInfer<E>>): void => {
   process.umask(0o077);
   if (NODE_MAJOR < 24) {
     console.log(

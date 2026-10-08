@@ -25,6 +25,6 @@ runCli(program, {
   onError: (error) => ({
     ok: false,
     error: describe(error),
-    kind: (error as { _tag?: string })._tag === "StorageUnavailable" ? "storage_unavailable" : "requires_review",
+    kind: error._tag === "StorageUnavailable" ? "storage_unavailable" : "requires_review",
   }),
 });
