@@ -6,11 +6,13 @@
 #import <signal.h>
 #import <errno.h>
 
-// The store folder is written into the built bundle's Info.plist by native/build.sh.
-static NSString *StoreRoot(void) {
-    id root = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"RitualStoreRoot"];
-    return [root isKindOfClass:[NSString class]] && [root isAbsolutePath] ? root : nil;
+// The store folder and the Node.js binary are written into the built bundle's Info.plist by native/build.sh.
+static NSString *AbsolutePathSetting(NSString *key) {
+    id value = [[NSBundle mainBundle] objectForInfoDictionaryKey:key];
+    return [value isKindOfClass:[NSString class]] && [value isAbsolutePath] ? value : nil;
 }
+static NSString *StoreRoot(void) { return AbsolutePathSetting(@"RitualStoreRoot"); }
+static NSString *NodeBinary(void) { return AbsolutePathSetting(@"RitualNode"); }
 static NSString *LogFolder(void) {
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/RitualDashboard"];
 }
@@ -75,9 +77,10 @@ static void LogEvent(NSString *event) {
     __weak RitualApp *weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *root = StoreRoot();
+        NSString *node = NodeBinary();
         NSString *database = [root stringByAppendingPathComponent:@"data/ritual.sqlite3"];
-        int fd = root ? open(database.fileSystemRepresentation, O_RDONLY) : -1;
-        int failure = root ? (fd < 0 ? errno : 0) : ENOENT;
+        int fd = (root && node) ? open(database.fileSystemRepresentation, O_RDONLY) : -1;
+        int failure = (root && node) ? (fd < 0 ? errno : 0) : ENOENT;
         BOOL valid = NO;
         if (fd >= 0) {
             char header[16] = {0};
@@ -94,7 +97,7 @@ static void LogEvent(NSString *event) {
                 LogEvent([NSString stringWithFormat:@"database_read_failed errno=%d", failure]);
                 NSAlert *alert = [[NSAlert alloc] init];
                 alert.messageText = @"Ritual Dashboard could not read its database";
-                alert.informativeText = (StoreRoot() ? @"Check that the store folder and its data/ritual.sqlite3 are available, then use Retry starting. No service has been started." : @"This build has no RitualStoreRoot. Rebuild it with native/build.sh OUTPUT_APP_PATH STORE_ROOT. No service has been started.");
+                alert.informativeText = ((StoreRoot() && NodeBinary()) ? @"Check that the store folder and its data/ritual.sqlite3 are available, then use Retry starting. No service has been started." : @"This build has no RitualStoreRoot or RitualNode. Rebuild it with native/build.sh OUTPUT_APP_PATH STORE_ROOT NODE. No service has been started.");
                 [alert addButtonWithTitle:@"OK"];
                 [alert runModal];
                 return;
@@ -105,13 +108,13 @@ static void LogEvent(NSString *event) {
     });
 }
 - (void)launchBackend {
+    // bin/ritual-server execs the Node.js binary named at build time, so no PATH lookup happens under launchd.
     NSTask *task = [[NSTask alloc] init];
-    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/python3"];
-    task.arguments = @[[StoreRoot() stringByAppendingPathComponent:@"app/dashboard_server.py"]];
+    task.executableURL = [NSURL fileURLWithPath:@"/bin/sh"];
+    task.arguments = @[[StoreRoot() stringByAppendingPathComponent:@"bin/ritual-server"]];
     task.currentDirectoryURL = [NSURL fileURLWithPath:@"/"];
     NSMutableDictionary *environment = [[[NSProcessInfo processInfo] environment] mutableCopy];
-    environment[@"PYTHONDONTWRITEBYTECODE"] = @"1";
-    environment[@"PYTHONUNBUFFERED"] = @"1";
+    environment[@"RITUAL_NODE"] = NodeBinary();
     task.environment = environment;
     for (NSString *name in @[@"named-backend.out.log", @"named-backend.err.log"]) {
         NSString *path = [LogFolder() stringByAppendingPathComponent:name];

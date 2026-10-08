@@ -2,10 +2,10 @@
 set -eu
 umask 077
 RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-export PYTHONPATH="$RITUAL_ROOT/app"
-export PYTHONDONTWRITEBYTECODE=1
+VITEST="$RITUAL_ROOT/node_modules/vitest/vitest.mjs"
+[ -f "$VITEST" ] || { echo 'Dependencies missing: run npm ci in the repository first' >&2; exit 2; }
 case "$*" in
-  '') exec /usr/bin/python3 -m unittest discover -s "$RITUAL_ROOT/tests" -p 'test*.py' ;;
-  --smoke) exec /usr/bin/python3 -m unittest discover -s "$RITUAL_ROOT/tests" -p 'test_agent_handover.py' -v ;;
+  '') exec "${RITUAL_NODE:-node}" "$VITEST" run --root "$RITUAL_ROOT" ;;
+  --smoke) exec "${RITUAL_NODE:-node}" "$VITEST" run --root "$RITUAL_ROOT" --reporter=verbose tests/agent-handover.test.ts ;;
   *) echo 'Usage: ritual-tests [--smoke]' >&2; exit 2 ;;
 esac

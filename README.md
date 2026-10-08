@@ -7,7 +7,7 @@ A small, local-first habit tracker (daily rituals plus a weekly review) that a c
   <img src="docs/screenshots/mobile-dark.png" alt="Mobile dashboard, dark theme" width="22%">
 </p>
 
-The screenshots show my real data. This is my personal setup, shared so you (or, more likely, your agent) can see how it fits together and adapt it. It is not a packaged product: expect to change things. There are no dependencies to install; the code is plain Python 3 from macOS, a little HTML/JS, and one small Objective-C app.
+The screenshots show my real data. This is my personal setup, shared so you (or, more likely, your agent) can see how it fits together and adapt it. It is not a packaged product: expect to change things. The code is TypeScript on Node.js 24 built on [Effect](https://effect.website) (the CLI, the SQLite store, the HTTP server, configuration and errors), a little plain HTML/JS for the dashboard, and one small Objective-C menu-bar app. It runs straight from the sources: `npm ci` is the only setup.
 
 ## How it works
 
@@ -39,9 +39,10 @@ phone ──Tailscale Serve (private HTTPS)──▶ 127.0.0.1:8765 ◀───
 
 ## Quickstart
 
-On macOS, from a fresh clone:
+On macOS, from a fresh clone with Node.js 24 on your PATH (`.node-version` names the exact version):
 
 ```sh
+npm ci                               # exact pinned dependencies, nothing global
 bin/ritualctl --init                 # create an empty data/ritual.sqlite3 (refuses if one exists)
 bin/ritualctl <<'JSON'
 {"op":"ritual_put","date":"2026-10-03","patch":{"protein":true,"plank_seconds":70},
@@ -74,36 +75,38 @@ Things you will probably want to change:
 
 | What | Where |
 |---|---|
-| The habits | They are real columns, so changing them needs a schema migration. Every place a habit is named: `app/ritual.py` (the `rituals` table columns in `SCHEMA`, `BOOLS`, `FIELDS`, and the plank special cases in the applicability conflict checks), `app/applicability.py` (`HABITS` and the `CHECK` constraint in `TABLE_SQL`), `app/dashboard.py` (the `SELECT` in `read_records` and the per-habit cells in `render`), `app/dashboard_web.py` (the `HABITS` labels and the frontend `habits` array in `DAILY_SCRIPT`), `tests/check_ui.cjs` (fixture row) and the tests. Planks are the one numeric habit (`plank_seconds`); the rest are true/false/null. |
-| Timezone | `Australia/Melbourne`: the `TZ` definitions in `app/ritual.py` and `app/applicability.py` (they load the bundled `app/Melbourne.tzif`, so they work on the macOS system Python without `tzdata`), and the `timezone` labels in `app/ritual.py`, `app/applicability.py` and `app/dashboard_web.py`. |
-| Port | `8765` in `app/dashboard_server.py` (config check) and `app/service_control.py`. |
-| Service names | LaunchAgent label `local.ritual-dashboard` (`app/service_control.py`), app path `~/Applications/Ritual Dashboard.app` (`app/service_control.py`), bundle ID in `native/Info.plist` and `native/build.sh`. |
-| Store location for the app | Passed to `native/build.sh OUTPUT_APP STORE_ROOT`, stored in the app's Info.plist. |
-| Python and Chrome | `/usr/bin/python3` in every `bin/` script; Chrome path in `tests/playwright.cjs`. |
-| Not on a Mac / no Tailscale | The CLI, store and static snapshot are plain Python and should run anywhere with Python 3.9+. Only the native app, `bin/ritual-service` and the identity check in `app/dashboard_server.py` assume macOS and Tailscale. |
+| The habits | They are real columns, so changing them needs a schema migration. Every place a habit is named: `src/store.ts` (the `rituals` table columns in `SCHEMA`, `BOOLS`, `FIELDS`, and the plank special cases in the applicability conflict checks), `src/applicability.ts` (`HABITS` and the `CHECK` constraint in `TABLE_SQL`), `src/dashboard.ts` (the `SELECT` in `readRecords` and the per-habit cells in `render`), `src/dashboardWeb.ts` (the `HABITS` labels and the frontend `habits` array in `DAILY_SCRIPT`), `tools/ui-fixture.ts` (fixture row) and the tests. Planks are the one numeric habit (`plank_seconds`); the rest are true/false/null. |
+| Timezone | `Australia/Melbourne`: `TIMEZONE` in `src/instants.ts` (local time comes from `Intl`, so Node's bundled ICU time zone data is the source of DST rules) and the `timezone` labels in `src/store.ts`, `src/applicability.ts` and `src/dashboardWeb.ts`. |
+| Port | `8765` in `src/dashboardServer.ts` (config check) and `src/serviceControl.ts`. |
+| Service names | LaunchAgent label `local.ritual-dashboard` (`src/serviceControl.ts`), app path `~/Applications/Ritual Dashboard.app` (`src/serviceControl.ts`), bundle ID in `native/Info.plist` and `native/build.sh`. |
+| Store location and Node for the app | Passed to `native/build.sh OUTPUT_APP STORE_ROOT NODE`, stored in the app's Info.plist. |
+| Node and Chrome | `${RITUAL_NODE:-node}` in every `bin/` script (a Node.js 24 binary); Chrome path in `tests/playwright.cjs`. |
+| Not on a Mac / no Tailscale | The CLI, store and static snapshot should run anywhere with Node.js 24. Only the native app, `bin/ritual-service` and the identity check in `src/dashboardServer.ts` assume macOS and Tailscale. |
 
 ## Project map
 
 | Path | Purpose |
 |---|---|
-| `app/ritual.py`, `app/applicability.py` | SQLite transactions, validation, audit, applicability and date rules |
-| `app/local_client.py`, `bin/ritualctl` | Local writes, init, idempotency, durable queue and replay |
-| `app/dashboard.py` | Shared matrix, weekly view, title bar with the ritual picker, formatting and static snapshots |
-| `app/dashboard_web.py`, `app/dashboard_theme.py` | Live read projections, frontends, theme and picker script |
-| `app/dashboard_server.py` | Private read-only HTTP service (config in ignored `config/dashboard-server.json`) |
-| `app/service_control.py`, `bin/ritual-service` | Start/stop/status for the existing LaunchAgent |
-| `app/agent_work.py`, `bin/ritual-agent` | Cooperative edit claims between agents |
+| `src/store.ts`, `src/applicability.ts` | SQLite transactions, validation, audit, applicability and date rules |
+| `src/instants.ts`, `src/encoding.ts`, `src/errors.ts` | Melbourne time and Python-compatible timestamp parsing; canonical JSON, hashing and escaping; the tagged error classes |
+| `src/localClient.ts`, `src/locks.ts`, `src/files.ts`, `bin/ritualctl` | Local writes, init, idempotency, durable queue and replay; cross-process locks; atomic file writes |
+| `src/dashboard.ts` | Shared matrix, weekly view, title bar with the ritual picker, formatting and static snapshots |
+| `src/dashboardWeb.ts`, `src/dashboardTheme.ts` | Live read projections, frontends, theme and picker script |
+| `src/dashboardServer.ts`, `bin/ritual-server` | Private read-only HTTP service (config in ignored `config/dashboard-server.json`) |
+| `src/serviceControl.ts`, `bin/ritual-service` | Start/stop/status for the existing LaunchAgent |
+| `src/agentWork.ts`, `bin/ritual-agent` | Cooperative edit claims between agents |
+| `src/cli.ts`, `src/bin/` | The JSON-on-stdout runner and the entry point behind each `bin/` wrapper |
 | `native/` | Menu-bar host app source and build script |
 | `examples/` | Templates for the server config and the LaunchAgent |
 | `tests/`, `bin/ritual-tests`, `bin/ritual-ui-check` | Backend tests on made-up fixtures, and browser checks |
 | `tools/screenshots.cjs`, `bin/ritual-screenshots`, `docs/screenshots/` | Regenerates the README images from a read-only copy of the data |
 | `AGENTS.md`, `HANDOFF.md`, `PROGRESS.md` | Agent instructions, operating cookbook and turn log |
 
-Ignored and created at runtime: `data/` (database, backups, exports, snapshot), `queue/`, `evidence/`, `logs/`, `config/`, `LOCAL.md`, `PROGRESS.local.md`.
+Ignored and created at runtime: `data/` (database, backups, exports, snapshot), `queue/`, `evidence/`, `logs/`, `config/`, `node_modules/`, `LOCAL.md`, `PROGRESS.local.md`.
 
 ## Requirements
 
-- macOS with its system Python 3 (3.9 or later). No Python packages.
+- Node.js 24 (`.node-version`) and `npm ci`. Dependencies are pinned exactly: `effect`, `@effect/platform-node` and `@effect/sql-sqlite-node` at runtime (SQLite is Node's built-in `node:sqlite`, no native build), with `vitest`, `@effect/vitest`, `typescript`, `oxlint` and `oxfmt` for development.
 - For the live dashboard: Tailscale, and Xcode command line tools to build the host app.
 - For `bin/ritual-ui-check` and `bin/ritual-screenshots`: Node, an existing Playwright module (found automatically, or set `RITUAL_PLAYWRIGHT_MODULE`) and Google Chrome. Nothing is installed for you.
 

@@ -3,4 +3,4 @@ set -eu
 umask 077
 RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 case "$*" in ''|--live) ;; *) echo 'Usage: ritual-ui-check [--live]' >&2; exit 2 ;; esac
-exec node "$RITUAL_ROOT/tests/check_ui.cjs" "$@"
+exec "${RITUAL_NODE:-node}" "$RITUAL_ROOT/tests/check_ui.cjs" "$@"

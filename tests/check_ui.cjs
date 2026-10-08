@@ -1,25 +1,10 @@
 // Existing Node + Playwright + installed Chrome; no dependency installation.
+// The fixture pages come from tools/ui-fixture.ts, run on the same Node as this check.
 const fs=require('node:fs'),path=require('node:path');
 const assert=require('node:assert/strict'),cp=require('node:child_process');
 const root=path.resolve(__dirname,'..');
 const {playwright,CHROME}=require('./playwright.cjs');
-const fixture=JSON.parse(cp.execFileSync('/usr/bin/python3',['-c',`
-import datetime as dt,json
-from pathlib import Path
-import dashboard,dashboard_web
-r=[{'date':'2026-10-03','checkins':['2026-10-03T12:12:00Z'],'magnesium':None,'protein':True,'stretching':True,'journalling':None,'plank_seconds':80}]
-w=[{'id':'fictional','date':'2026-10-03','type':'gym push'}]
-s=dt.datetime.fromisoformat('2026-10-04T13:00:00+11:00')
-from unittest.mock import patch
-wk=[{'week_start':'2026-09-28','answer':'Fictional: wrote the plan\\nFictional: a second line that is long enough to wrap on a phone screen without any sideways scrolling'},{'week_start':'2026-09-21','answer':'Fictional quiet week'}]
-with patch('dashboard.read_records',return_value=(r,w,[])):
- data=dashboard_web.dashboard_data(Path('/unused'),s)
-with patch('dashboard.read_weekly',return_value=wk):
- weekly=dashboard_web.weekly_data(Path('/unused'),s)
-print(json.dumps({'api':{'dashboard':data,'weekly':weekly},
- 'live':{'daily':dashboard_web.frontend('daily').decode(),'weekly':dashboard_web.frontend('weekly').decode()},
- 'static':{'daily':dashboard.render(dashboard.matrix(r,w),s,Path('/unused'),dashboard.status_report(r,w,[],s)),'weekly':dashboard.render_weekly(wk,s)}}))
-`],{env:{...process.env,PYTHONPATH:path.join(root,'app'),PYTHONDONTWRITEBYTECODE:'1'},encoding:'utf8'}));
+const fixture=JSON.parse(cp.execFileSync(process.execPath,[path.join(root,'tools','ui-fixture.ts')],{encoding:'utf8',maxBuffer:64<<20}));
 // Each ritual has its own bookmarkable address; the static snapshot uses sibling files.
 const urls={live:{daily:'https://ritual.test/',weekly:'https://ritual.test/weekly'},static:{daily:'https://ritual.test/ritual-dashboard.html',weekly:'https://ritual.test/weekly-review.html'}};
 const titles={daily:'Daily rituals',weekly:'Weekly review'};

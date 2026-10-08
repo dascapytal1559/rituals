@@ -1,0 +1,29 @@
+{
+  "name": "rituals",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Local-first habit tracker: one JSON-on-stdin CLI writing a SQLite store, plus a private read-only dashboard.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "check": "tsc --noEmit && oxlint src tests tools && oxfmt --check src tests tools",
+    "fix": "oxlint --fix src tests tools && oxfmt src tests tools"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.2",
+    "@effect/sql-sqlite-node": "4.0.2",
+    "effect": "4.0.2"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.2",
+    "@types/node": "24.19.1",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3"
+  }
+}

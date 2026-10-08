@@ -20,19 +20,9 @@ const SHOTS=[
  {name:'mobile-dark',  width:390, height:844,scale:3,mobile:true, colorScheme:'dark'},
 ];
 if(!fs.statSync(db,{throwIfNoEntry:false})?.isFile()){console.error('No database at '+db+'; pass --db PATH');process.exit(2)}
-// Snapshot the store with SQLite's backup API (source opened mode=ro), then render the
-// exact live payload and frontend from that private copy. The source is never written.
-const page=JSON.parse(cp.execFileSync('/usr/bin/python3',['-c',`
-import json,sqlite3,sys,tempfile
-from pathlib import Path
-import dashboard_web
-with tempfile.TemporaryDirectory() as tmp:
-    (Path(tmp)/'data').mkdir()
-    src=sqlite3.connect(Path(sys.argv[1]).as_uri()+'?mode=ro',uri=True)
-    dst=sqlite3.connect(Path(tmp)/'data'/'ritual.sqlite3')
-    src.backup(dst);dst.close();src.close()
-    print(json.dumps({'api':dashboard_web.dashboard_data(Path(tmp)),'html':dashboard_web.frontend().decode()}))
-`,db],{env:{...process.env,PYTHONPATH:path.join(root,'app'),PYTHONDONTWRITEBYTECODE:'1'},encoding:'utf8',maxBuffer:64<<20}));
+// tools/screenshot-page.ts snapshots the store with SQLite's backup API (source opened mode=ro),
+// then renders the exact live payload and frontend from that private copy. The source is never written.
+const page=JSON.parse(cp.execFileSync(process.execPath,[path.join(root,'tools','screenshot-page.ts'),db],{encoding:'utf8',maxBuffer:64<<20}));
 (async()=>{
  const {chromium}=playwright();
  const browser=await chromium.launch({headless:true,executablePath:CHROME,chromiumSandbox:true});

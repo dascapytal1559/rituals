@@ -1,6 +1,5 @@
 #!/bin/sh
 set -eu
 umask 077
-RITUAL_SERVER_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-export PYTHONDONTWRITEBYTECODE=1
-exec /usr/bin/python3 "$RITUAL_SERVER_ROOT/app/dashboard_server.py"
+RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "${RITUAL_NODE:-node}" "$RITUAL_ROOT/src/bin/ritual-server.ts" "$@"

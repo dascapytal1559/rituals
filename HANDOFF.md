@@ -2,6 +2,8 @@
 
 Run logging, reads, service and backup commands from the live folder (its path is in LOCAL.md). Code/docs/UI work runs from a separate clone or worktree (see Code changes). Read AGENTS.md and LOCAL.md first. Commands here need an authorized Mac executor; they do not provide cloud access while the Mac is unavailable. No previous chat or agent workspace is required.
 
+Every `bin/` command runs TypeScript directly on Node.js 24 from the folder's own `node_modules`: run `npm ci` once per clone (and again when `package-lock.json` changes). The wrappers use `${RITUAL_NODE:-node}`; if `node` on PATH is older than 24, set `RITUAL_NODE=/absolute/path/to/node24` in the environment of whoever runs them (the LaunchAgent app passes the binary recorded at build time, see Native below). A wrong Node prints `{"ok": false, "error": "Rituals needs Node.js 24 or later…"}` and exits 1 instead of doing anything.
+
 ## First run (new installation only)
 
 ```sh
@@ -114,11 +116,14 @@ The live folder is a git repository on `main`; AGENTS.md lists what is tracked a
 
 ```sh
 git clone /path/to/live-folder ritual-work && cd ritual-work
+npm ci
 git checkout -b YOUR_BRANCH
 # edit, then:
-bin/ritual-tests && bin/ritual-ui-check
+npm run check && bin/ritual-tests && bin/ritual-ui-check
 git add -A && git commit -m 'Describe the change'
 ```
+
+`npm run check` is `tsc --noEmit`, `oxlint` and `oxfmt --check`; `npm run fix` applies lint fixes and formatting. The conventions for Effect code are in AGENTS.md.
 
 Land in the live folder as a fast-forward, then deploy if needed:
 
@@ -134,7 +139,7 @@ Commit when done. Never leave uncommitted or half-finished edits in the live fol
 
 ## UI development and service
 
-`dashboard.py` owns shared matrix, weekly view, title bar/ritual picker and static views; `dashboard_web.py` live API projection/frontend; `dashboard_theme.py` theme; `dashboard_server.py` authorization/routes. Production DB and private config are not fixtures. Keep the existing privacy/display rules in AGENTS.md.
+`src/dashboard.ts` owns shared matrix, weekly view, title bar/ritual picker and static views; `src/dashboardWeb.ts` live API projection/frontend; `src/dashboardTheme.ts` theme; `src/dashboardServer.ts` authorization/routes. Production DB and private config are not fixtures. Keep the existing privacy/display rules in AGENTS.md.
 
 ```sh
 bin/ritual-tests
@@ -143,17 +148,17 @@ bin/ritual-ui-check
 bin/ritual-service status
 ```
 
-Backend tests write only temporary stores. Smoke exercises two sequential fresh clients, queue replay, retry, conflict/correction/history and export/restore. Browser check uses fictional records and isolated installed Chrome, testing live/static HTML at mobile/desktop and light/dark. It requires existing Node/Playwright; no install is automatic. Playwright only drives the installed `/Applications/Google Chrome.app` and needs no browser download. `tests/check_ui.cjs` looks for Playwright in this order: `RITUAL_PLAYWRIGHT_MODULE`, normal Node resolution of `playwright`, then the first `~/.npm/_npx/*/node_modules/playwright`. If discovery fails, point the check at any existing copy: `RITUAL_PLAYWRIGHT_MODULE=/path/to/node_modules/playwright bin/ritual-ui-check`. It aborts unexpected fixture network requests. `bin/ritual-ui-check --live` additionally reads the actual private page/API without injecting an identity or changing data.
+Backend tests (Vitest, under `tests/*.test.ts`) write only temporary stores. Smoke exercises two sequential fresh client processes, queue replay, retry, conflict/correction/history and export/restore. Browser check uses fictional records and isolated installed Chrome, testing live/static HTML at mobile/desktop and light/dark. It requires existing Node/Playwright; no install is automatic. Playwright only drives the installed `/Applications/Google Chrome.app` and needs no browser download. `tests/check_ui.cjs` looks for Playwright in this order: `RITUAL_PLAYWRIGHT_MODULE`, normal Node resolution of `playwright`, then the first `~/.npm/_npx/*/node_modules/playwright`. If discovery fails, point the check at any existing copy: `RITUAL_PLAYWRIGHT_MODULE=/path/to/node_modules/playwright bin/ritual-ui-check`. It aborts unexpected fixture network requests. `bin/ritual-ui-check --live` additionally reads the actual private page/API without injecting an identity or changing data.
 
-Python/frontend edits are deployed by a controlled restart, not just saving a file. Claim ownership, test, then:
+Server/frontend edits are deployed by a controlled restart, not just saving a file (the server loads its code once at start). Claim ownership, test, then:
 ```sh
 bin/ritual-service restart
 bin/ritual-ui-check --live
 ```
 
-Restart stops the existing named app/backend and bootstraps the unchanged authorized LaunchAgent. It does not modify login/network/access config. `stop` unloads it for maintenance; `start` loads/kickstarts the existing job. Status shows loaded/running/reachability without exposing owner identity. Direct app menu Retry/Quit remains available. Reload the browser once for changed frontend code; data otherwise refreshes on load/visibility/each visible minute. Never start a second raw Python service on the occupied port.
+Restart stops the existing named app/backend and bootstraps the unchanged authorized LaunchAgent. It does not modify login/network/access config. `stop` unloads it for maintenance; `start` loads/kickstarts the existing job. Status shows loaded/running/reachability without exposing owner identity. Direct app menu Retry/Quit remains available. Reload the browser once for changed frontend code; data otherwise refreshes on load/visibility/each visible minute. Never start a second raw Node service on the occupied port.
 
-Native changes need `native/build.sh NEW_OUTPUT_APP_PATH STORE_ROOT` (fresh output path; STORE_ROOT is the live folder's absolute path); it builds/signs but doesn't install. Before replacing the installed app: preserve its full bundle in evidence, stop existing service, install the reviewed build at ~/Applications/Ritual Dashboard.app preserving bundle ID, then start/test. Never change privacy permissions to bypass a failure. The store root is explicit: build.sh writes STORE_ROOT into the bundle's Info.plist as `RitualStoreRoot`, and the app refuses to start without it. The LaunchAgent is ~/Library/LaunchAgents/local.ritual-dashboard.plist, label local.ritual-dashboard in gui/currentUID. Logs contain generic events under ~/Library/Logs/RitualDashboard. Installation-specific notes are in LOCAL.md.
+Native changes need `native/build.sh NEW_OUTPUT_APP_PATH STORE_ROOT NODE` (fresh output path; STORE_ROOT is the live folder's absolute path; NODE the absolute path of a Node.js 24 binary, for example the one `command -v node` prints in a shell where `node --version` is v24); it builds/signs but doesn't install. Before replacing the installed app: preserve its full bundle in evidence, stop existing service, install the reviewed build at ~/Applications/Ritual Dashboard.app preserving bundle ID, then start/test. Never change privacy permissions to bypass a failure. Both paths are explicit: build.sh writes them into the bundle's Info.plist as `RitualStoreRoot` and `RitualNode`, the app refuses to start without either, and it launches the backend as `/bin/sh STORE_ROOT/bin/ritual-server` with `RITUAL_NODE` set to that binary, so nothing depends on launchd's PATH. The LaunchAgent is ~/Library/LaunchAgents/local.ritual-dashboard.plist, label local.ritual-dashboard in gui/currentUID. Logs contain generic events under ~/Library/Logs/RitualDashboard. Installation-specific notes are in LOCAL.md.
 
 Each ritual is its own page: Daily rituals at `/` (snapshot `data/views/ritual-dashboard.html`) and Weekly review at `/weekly` (snapshot `data/views/weekly-review.html`, API `/api/weekly`). The title's dropdown icon opens a native select over the title that switches between them; a new ritual is a new entry in `dashboard.RITUALS` with its page, route and API.
 
@@ -177,7 +182,7 @@ bin/ritualctl --migrate
 `bin/ritual-service` only controls an existing setup; it never creates one. To create one:
 
 1. `cp examples/dashboard-server.json config/` and set `tailscale_hostname` (your machine's `name.tailnet.ts.net`) and `owner_login` (the Tailscale login allowed to read). The loader accepts exactly these four fields, `127.0.0.1` and port 8765.
-2. `native/build.sh ~/Applications/'Ritual Dashboard.app' "$PWD"` from the live folder.
+2. `native/build.sh ~/Applications/'Ritual Dashboard.app' "$PWD" "$(command -v node)"` from the live folder, in a shell where `node --version` prints v24 (otherwise give the Node 24 binary's absolute path).
 3. Copy `examples/local.ritual-dashboard.plist` to `~/Library/LaunchAgents/`, replace `/Users/you` with your home folder, then `bin/ritual-service start`.
 4. Serve it privately on your tailnet, for example `tailscale serve --bg --https=443 http://127.0.0.1:8765` (check `tailscale serve --help` for your version). Never use Funnel: Serve adds the `Tailscale-User-Login` header the backend checks, and Funnel would expose it publicly.
 
@@ -204,7 +209,7 @@ bin/ritualctl <<'JSON'
 JSON
 ```
 
-Full exports include private source/audit records: retain locally with existing private modes, never put in UI/public logs/repos. Export without save returns snapshot JSON on stdout, so redirect privately rather than printing it into a transcript. Verify an export by restoring it to a new empty temporary Store through the supported API and comparing returned data_sha256. See tests/test_agent_handover.py for a complete isolated roundtrip. Restore accepts only an empty store; don't run restore against production or replace the live DB ad hoc. Production recovery requires an explicit plan, current backup/export, stopped writers/service and preservation of the displaced DB/queue. This handbook does not authorize deleting originals or applying a destructive restore.
+Full exports include private source/audit records: retain locally with existing private modes, never put in UI/public logs/repos. Export without save returns snapshot JSON on stdout, so redirect privately rather than printing it into a transcript. Verify an export by restoring it to a new empty temporary Store through the supported API and comparing returned data_sha256. See tests/agent-handover.test.ts for a complete isolated roundtrip. Restore accepts only an empty store; don't run restore against production or replace the live DB ad hoc. Production recovery requires an explicit plan, current backup/export, stopped writers/service and preservation of the displaced DB/queue. This handbook does not authorize deleting originals or applying a destructive restore.
 
 ## End a turn
 
