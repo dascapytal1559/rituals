@@ -19,7 +19,7 @@ export const runCli = <A, E>(program: Effect.Effect<A, E>, options: RunOptions):
     console.log(
       dumps({
         ok: false,
-        error: `Rituals needs Node.js 24 or later; found v${process.versions.node}. Set RITUAL_NODE to a Node 24 binary.`,
+        error: `Rituals needs Node.js 24 or later; found v${process.versions.node}. Point config/node or RITUAL_NODE at a Node 24 binary.`,
       }),
     );
     process.exitCode = 1;

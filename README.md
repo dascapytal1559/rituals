@@ -79,8 +79,8 @@ Things you will probably want to change:
 | Timezone | `Australia/Melbourne`: `TIMEZONE` in `src/instants.ts` (local time comes from `Intl`, so Node's bundled ICU time zone data is the source of DST rules) and the `timezone` labels in `src/store.ts`, `src/applicability.ts` and `src/dashboardWeb.ts`. |
 | Port | `8765` in `src/dashboardServer.ts` (config check) and `src/serviceControl.ts`. |
 | Service names | LaunchAgent label `local.ritual-dashboard` (`src/serviceControl.ts`), app path `~/Applications/Ritual Dashboard.app` (`src/serviceControl.ts`), bundle ID in `native/Info.plist` and `native/build.sh`. |
-| Store location and Node for the app | Passed to `native/build.sh OUTPUT_APP STORE_ROOT NODE`, stored in the app's Info.plist. |
-| Node and Chrome | `${RITUAL_NODE:-node}` in every `bin/` script (a Node.js 24 binary); Chrome path in `tests/playwright.cjs`. |
+| Store location for the app | Passed to `native/build.sh OUTPUT_APP STORE_ROOT`, stored in the app's Info.plist. |
+| Node and Chrome | `bin/node.sh` chooses the Node.js 24 binary for every `bin/` script: `RITUAL_NODE`, then the ignored `config/node`, then PATH; Chrome path in `tests/playwright.cjs`. |
 | Not on a Mac / no Tailscale | The CLI, store and static snapshot should run anywhere with Node.js 24. Only the native app, `bin/ritual-service` and the identity check in `src/dashboardServer.ts` assume macOS and Tailscale. |
 
 ## Project map
@@ -106,7 +106,7 @@ Ignored and created at runtime: `data/` (database, backups, exports, snapshot), 
 
 ## Requirements
 
-- Node.js 24 (`.node-version`) and `npm ci`. Dependencies are pinned exactly: `effect`, `@effect/platform-node` and `@effect/sql-sqlite-node` at runtime (SQLite is Node's built-in `node:sqlite`, no native build), with `vitest`, `@effect/vitest`, `typescript`, `oxlint` and `oxfmt` for development.
+- Node.js 24 (`.node-version`) and `npm ci`. If `node` on your PATH is older, write the absolute path of a Node 24 binary to `config/node` (ignored by git) and every `bin/` command uses it. Dependencies are pinned exactly: `effect`, `@effect/platform-node` and `@effect/sql-sqlite-node` at runtime (SQLite is Node's built-in `node:sqlite`, no native build), with `vitest`, `@effect/vitest`, `typescript`, `oxlint` and `oxfmt` for development.
 - For the live dashboard: Tailscale, and Xcode command line tools to build the host app.
 - For `bin/ritual-ui-check` and `bin/ritual-screenshots`: Node, an existing Playwright module (found automatically, or set `RITUAL_PLAYWRIGHT_MODULE`) and Google Chrome. Nothing is installed for you.
 

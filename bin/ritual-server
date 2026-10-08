@@ -2,4 +2,5 @@
 set -eu
 umask 077
 RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec "${RITUAL_NODE:-node}" "$RITUAL_ROOT/src/bin/ritual-server.ts" "$@"
+. "$RITUAL_ROOT/bin/node.sh"
+exec "$RITUAL_NODE" "$RITUAL_ROOT/src/bin/ritual-server.ts" "$@"

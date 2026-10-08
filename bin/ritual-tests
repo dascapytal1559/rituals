@@ -2,10 +2,11 @@
 set -eu
 umask 077
 RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$RITUAL_ROOT/bin/node.sh"
 VITEST="$RITUAL_ROOT/node_modules/vitest/vitest.mjs"
 [ -f "$VITEST" ] || { echo 'Dependencies missing: run npm ci in the repository first' >&2; exit 2; }
 case "$*" in
-  '') exec "${RITUAL_NODE:-node}" "$VITEST" run --root "$RITUAL_ROOT" ;;
-  --smoke) exec "${RITUAL_NODE:-node}" "$VITEST" run --root "$RITUAL_ROOT" --reporter=verbose tests/agent-handover.test.ts ;;
+  '') exec "$RITUAL_NODE" "$VITEST" run --root "$RITUAL_ROOT" ;;
+  --smoke) exec "$RITUAL_NODE" "$VITEST" run --root "$RITUAL_ROOT" --reporter=verbose tests/agent-handover.test.ts ;;
   *) echo 'Usage: ritual-tests [--smoke]' >&2; exit 2 ;;
 esac
