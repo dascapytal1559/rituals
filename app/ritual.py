@@ -344,13 +344,20 @@ class Store:
                 entity, key = "rituals", date(req.get("date"))
                 before = self.get(entity, key)
                 patch = validated(entity, req.get("patch"))
-                if not patch or "date" in patch: fail("Patch must contain reported fields, without date")
+                journal_entry_at = instant(req["journal_entry_at"]) if "journal_entry_at" in req else None
+                if (not patch and journal_entry_at is None) or "date" in patch:
+                    fail("Patch must contain reported fields or journal_entry_at, without date")
                 after = before.copy() if before else {"date": key, "checkins": [], **dict.fromkeys(BOOLS), "plank_seconds": None, "notes": None}
                 for k, v in patch.items():
                     if k == "checkins": after[k] = sorted(set(after[k] + v))
                     elif k == "notes" and v: after[k] = "\n".join(filter(None, [after.get(k), v]))
                     elif before and after.get(k) is not None and after[k] != v: fail("Changing a recorded value requires correct with expected_revision and reason")
                     else: after[k] = v
+                # The caller supplies an authorized journal's original timestamp.
+                # Decide under the write lock so a default cannot replace a
+                # check-in saved by another agent or an explicit patch.
+                if journal_entry_at is not None and not after["checkins"]:
+                    after["checkins"] = [journal_entry_at]
             elif op == "weekly_put":
                 # Like notes, a further answer for the same week is appended; changing earlier words needs correct.
                 entity = "weekly_reviews"

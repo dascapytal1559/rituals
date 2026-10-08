@@ -47,7 +47,7 @@ Use actual requested dates/as_of; omit as_of for current-time behavior. Rituals/
 
 ## Writes: templates, not real reports
 
-Replace every example value with an established user report before production use. Every action needs stable request_id and source_text containing verbatim words, original message ID, receipt instant, occurrence qualification and disclosed date inference. Omitted fields remain intact. A completion report does not establish check-in.
+Replace every example value with an established user report before production use. Every action needs stable request_id and source_text containing verbatim words, original message ID, receipt instant, occurrence qualification and disclosed date inference. Omitted fields remain intact. An ordinary completion report does not establish check-in; authorized journal defaults use the dedicated option below.
 
 Partial habit report:
 ```json
@@ -60,6 +60,21 @@ Explicit check-in with only receipt instant available:
 ```
 
 Patch fields: checkins array of offset-bearing instants; magnesium/protein/stretching/journalling true/false/null; plank_seconds nonnegative integer/null; notes text/null. checkins merges without discarding existing timestamps. A changed existing nonnull habit requires correction, not another put.
+
+### Journal timestamp as a default check-in
+
+Read LOCAL.md before using this opt-in feature: it defines whether journal-default check-in is authorized, its effective time and any specifically authorized historical exception. A bare journalling completion, file creation, import, scheduled ping or photo is not a journal entry timestamp. Never backfill past entries merely because this option exists.
+
+For an eligible first journal report, add top-level `journal_entry_at` to the original idempotent `ritual_put` request. Supply the offset-bearing timestamp from the original journal report/source; when it is a message receipt, label it explicitly in source_text and retain the original words, source ID and date interpretation. Exact physical arrival or completion remains unknown unless separately established. Keep the logical ritual date separate from that instant, including after-midnight continuations and DST. Never substitute current processing/write time or filesystem timestamps.
+
+Fictional combined journal completion/default example (replace all values):
+```json
+{"op":"ritual_put","date":"2026-10-08","patch":{"journalling":true},"journal_entry_at":"2026-10-09T01:15:00+11:00","request_id":"ORIGINAL_JOURNAL_MESSAGE_ID:ritual","source_text":"Exact original journal words. Original source ID ORIGINAL_JOURNAL_MESSAGE_ID. Received at 2026-10-09T01:15:00+11:00. Authorized first-journal default check-in uses this original message receipt; actual physical arrival/completion instant unknown. Logical ritual date 2026-10-08 is the disclosed prior-evening interpretation."}
+```
+
+The store validates the instant and applies it only when checkins is empty after merging any explicit checkins patch, within the same write transaction. Existing check-ins therefore win, and retries or later journal reports cannot shift the first default. The journal option can accompany `patch:{}` when only a default is being recorded; it does not itself mark journalling complete or change other habits. For later continuations, preserve the source and append the journal; omit this option and avoid a new database write unless there is a separate reported change. An explicitly corrected check-in remains intact.
+
+Use stable original source/action IDs and preserve exact prepared payloads in the offline queue. On reconnect replay in source order; do not create a new ID or recompute a timestamp for a lost acknowledgement. Do not add this option to previously acknowledged or queued requests with the same ID: changed payloads are rejected. A separately authorized retrospective application needs a fresh authorization/action ID linking the original journal evidence. Changing an existing recorded check-in still uses `correct` with current expected_revision, fresh source and reason; defaulting is not an override.
 
 Correction after reading current entity revision (replace 123):
 ```json
