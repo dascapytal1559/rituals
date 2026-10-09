@@ -157,6 +157,36 @@ layer(NodeServices.layer, { excludeTestServices: true })("dashboard server", (it
     }),
   );
 
+  it.effect("a Tailscale Serve path mount changes nothing the server checks", () =>
+    Effect.gen(function* () {
+      const { port } = yield* setup();
+      // What Serve sent for https://host/rituals/... on Tailscale 1.104: the mount stripped from the path (/rituals and
+      // /rituals/ both arrive as /), the original Host, and these extra headers, from loopback.
+      const forwarded = {
+        Host: HOSTNAME,
+        "Tailscale-Headers-Info": "https://tailscale.com/s/serve-headers",
+        "Tailscale-User-Name": "Fictional Owner",
+        "Tailscale-User-Profile-Pic": "https://example.invalid/pic.png",
+        "X-Forwarded-For": "100.64.0.1",
+        "X-Forwarded-Host": HOSTNAME,
+        "X-Forwarded-Proto": "https",
+      };
+      for (const p of ["/", "/weekly", "/api/dashboard", "/api/weekly"]) {
+        expect((yield* request(port, { path: p, headers: forwarded })).status, p).toBe(200);
+        expect((yield* request(port, { path: p, headers: forwarded, identity: "other@example.invalid" })).status).toBe(
+          403,
+        );
+        expect((yield* request(port, { path: p, headers: forwarded, identity: null })).status).toBe(403);
+        expect((yield* request(port, { path: p, headers: forwarded, method: "POST" })).status).toBe(405);
+      }
+      // The server never serves the mount itself; only Serve's stripping maps it.
+      for (const p of ["/rituals", "/rituals/", "/rituals/weekly", "/rituals/api/dashboard"])
+        expect((yield* request(port, { path: p, headers: forwarded })).status, p).toBe(404);
+      // A mount on another HTTPS port is not an approved Host.
+      expect((yield* request(port, { headers: { ...forwarded, Host: HOSTNAME + ":8444" } })).status).toBe(400);
+    }),
+  );
+
   it.effect("fresh data and no database or snapshot writes", () =>
     Effect.gen(function* () {
       const { root, store, port } = yield* setup();

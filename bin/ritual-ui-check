@@ -3,5 +3,5 @@ set -eu
 umask 077
 RITUAL_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$RITUAL_ROOT/bin/node.sh"
-case "$*" in ''|--live) ;; *) echo 'Usage: ritual-ui-check [--live]' >&2; exit 2 ;; esac
+case "$*" in ''|--live|'--live /'*) ;; *) echo 'Usage: ritual-ui-check [--live [MOUNT_PATH]]' >&2; exit 2 ;; esac
 exec "$RITUAL_NODE" "$RITUAL_ROOT/tests/check_ui.cjs" "$@"

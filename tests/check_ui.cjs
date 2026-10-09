@@ -5,26 +5,30 @@ const assert=require('node:assert/strict'),cp=require('node:child_process');
 const root=path.resolve(__dirname,'..');
 const {playwright,CHROME}=require('./playwright.cjs');
 const fixture=JSON.parse(cp.execFileSync(process.execPath,[path.join(root,'tools','ui-fixture.ts')],{encoding:'utf8',maxBuffer:64<<20}));
-// Each ritual has its own bookmarkable address; the static snapshot uses sibling files.
-const urls={live:{daily:'https://ritual.test/',weekly:'https://ritual.test/weekly'},static:{daily:'https://ritual.test/ritual-dashboard.html',weekly:'https://ritual.test/weekly-review.html'}};
+// Each ritual has its own bookmarkable address; the static snapshot uses sibling files. "mounted" is the live page under
+// a Tailscale Serve path mount: the same HTML, opened at /rituals without its slash, whose API only answers under the mount.
+const urls={live:{daily:'https://ritual.test/',weekly:'https://ritual.test/weekly'},mounted:{daily:'https://ritual.test/rituals/',weekly:'https://ritual.test/rituals/weekly'},static:{daily:'https://ritual.test/ritual-dashboard.html',weekly:'https://ritual.test/weekly-review.html'}};
+const entry=(kind,ritual)=>kind==='mounted'&&ritual==='daily'?'https://ritual.test/rituals':urls[kind][ritual];
+const apiBase={live:'https://ritual.test/',mounted:'https://ritual.test/rituals/'};
 const titles={daily:'Daily rituals',weekly:'Weekly review'};
 (async()=>{
  const {chromium}=playwright();
  const browser=await chromium.launch({headless:true,executablePath:CHROME,chromiumSandbox:true});
  const cases=[];
  try{
-  for(const width of [390,1280])for(const colorScheme of ['light','dark'])for(const kind of ['static','live'])for(const ritual of ['daily','weekly']){
+  for(const width of [390,1280])for(const colorScheme of ['light','dark'])for(const kind of ['static','live','mounted'])for(const ritual of ['daily','weekly']){
    const other=ritual==='daily'?'weekly':'daily';
    const context=await browser.newContext({viewport:{width,height:844},isMobile:width===390,hasTouch:width===390,colorScheme});
    let uiVersion='A';
    const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await context.route('**/*',route=>{
     const u=route.request().url();
-    for(const r of ['daily','weekly'])if(u===urls[kind][r])return route.fulfill({contentType:'text/html',body:fixture[kind][r].replace(/<h1[^>]*>.*?<\/h1>/,'<h1>Fictional UI handover '+uiVersion+'</h1>')});
-    for(const api of ['dashboard','weekly'])if(kind==='live'&&u==='https://ritual.test/api/'+api)return route.fulfill({contentType:'application/json',body:JSON.stringify(fixture.api[api])});
+    for(const r of ['daily','weekly'])if(u===urls[kind][r]||u===entry(kind,r))return route.fulfill({contentType:'text/html',body:fixture[kind==='mounted'?'live':kind][r].replace(/<h1[^>]*>.*?<\/h1>/,'<h1>Fictional UI handover '+uiVersion+'</h1>')});
+    for(const api of ['dashboard','weekly'])if(kind!=='static'&&u===apiBase[kind]+'api/'+api)return route.fulfill({contentType:'application/json',body:JSON.stringify(fixture.api[api])});
     return route.abort();
    });
-   await page.goto(urls[kind][ritual]);await page.waitForSelector('tbody tr');
+   await page.goto(entry(kind,ritual));await page.waitForSelector('tbody tr');
+   assert.equal(page.url(),urls[kind][ritual],'the base page adds its missing slash so relative addresses stay in the mount');
    assert.equal(await page.title(),titles[ritual]);
    if(ritual==='daily'){
     assert.equal(await page.locator('.checkin').innerText(),'22:12');
@@ -92,7 +96,7 @@ const titles={daily:'Daily rituals',weekly:'Weekly review'};
     // Without a manifest WebKit reports display-mode browser, so an iOS web clip is also detected by navigator.standalone.
     const clip=await context.newPage();clip.on('pageerror',e=>errors.push(e.message));
     await clip.addInitScript(()=>Object.defineProperty(Navigator.prototype,'standalone',{configurable:true,get:()=>true}));
-    await clip.goto(urls[kind][ritual]);await clip.waitForSelector('tbody tr');
+    await clip.goto(entry(kind,ritual));await clip.waitForSelector('tbody tr');
     assert.equal(await clip.evaluate(()=>document.documentElement.dataset.webApp),'ios');
     assert.equal(await clip.locator('header').evaluate(e=>parseFloat(getComputedStyle(e).paddingTop)),14,'navigator.standalone: 10px extra');
     await clip.close();
@@ -120,14 +124,21 @@ const titles={daily:'Daily rituals',weekly:'Weekly review'};
    assert.equal(await page.locator('#ritual-picker').evaluate(e=>e.options[e.selectedIndex].textContent),titles[other]);
    assert.deepEqual(errors,[]);cases.push({kind,ritual,width,colorScheme,fixture_edit_reload:true,picker:true,passed:true});await context.close();
   }
-  if(process.argv.includes('--live')){
+  const live=process.argv.indexOf('--live');
+  if(live!==-1){
+   // The Serve path the dashboard is mounted at (default /), opened as typed; the page must still find its API and pages.
+   const mount=process.argv[live+1]??'/';assert.match(mount,/^\/(?:[A-Za-z0-9._-]+\/?)?$/,'mount is / or one path segment');
    const hostname=JSON.parse(fs.readFileSync(path.join(root,'config/dashboard-server.json'))).tailscale_hostname;
    const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
    const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
-   const url='https://'+hostname+'/';const response=await page.goto(url);assert.equal(response.status(),200);
-   await page.waitForSelector('tbody tr');
+   const url='https://'+hostname+mount.replace(/\/?$/,'/');const response=await page.goto('https://'+hostname+mount);assert.equal(response.status(),200);
+   await page.waitForSelector('tbody tr');assert.equal(page.url(),url);
    const api=await context.request.get(url+'api/dashboard');assert.equal(api.status(),200);
    const data=await api.json();assert.equal(await page.locator('tbody tr').count(),data.rows.length);
+   await Promise.all([page.waitForURL(url+'weekly'),page.locator('#ritual-picker').selectOption({label:titles.weekly})]);
+   await page.waitForFunction(()=>document.querySelector('#week-count').textContent!=='—');
+   await Promise.all([page.waitForURL(url),page.locator('#ritual-picker').selectOption({label:titles.daily})]);
+   await page.waitForSelector('tbody tr');
    await page.reload();await page.waitForSelector('tbody tr');
    const weeklyResponse=await page.goto(url+'weekly');assert.equal(weeklyResponse.status(),200);
    await page.waitForFunction(()=>document.querySelector('#week-count').textContent!=='—');
@@ -136,7 +147,7 @@ const titles={daily:'Daily rituals',weekly:'Weekly review'};
    assert.deepEqual(Object.keys(weeks).sort(),['count','generated_at','timezone','updated_display','weeks']);
    for(const week of weeks.weeks)assert.deepEqual(Object.keys(week).sort(),['answer','display','full','week_end','week_start']);
    assert.deepEqual(errors,[]);
-   cases.push({kind:'actual-private-https',rows:data.rows.length,weeks:weeks.weeks.length,passed:true});await context.close();
+   cases.push({kind:'actual-private-https',mount,rows:data.rows.length,weeks:weeks.weeks.length,passed:true});await context.close();
   }
  }finally{await browser.close()}
  console.log(JSON.stringify({cases},null,2));

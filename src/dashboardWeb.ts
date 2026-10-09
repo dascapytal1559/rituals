@@ -191,7 +191,11 @@ function load(url, render) {
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 }
 `;
+// The daily page is the app's base address. Serve forwards a mount without its trailing slash (/rituals) as / too,
+// so add the slash before anything resolves a relative URL, or api/dashboard and weekly would escape the mount.
 export const DAILY_SCRIPT =
+  `if (!location.pathname.endsWith('/')) history.replaceState(null, '', location.pathname + '/' + location.search + location.hash);
+` +
   LOADER +
   `const habits = ['magnesium','protein','stretching','planks','journalling'];
 function render(data) {
@@ -240,7 +244,7 @@ function render(data) {
   document.querySelector('#updated').textContent = 'Updated '+data.updated_display;
   message.textContent = data.count ? '' : 'No dates recorded yet.';message.hidden = data.count !== 0;
 }
-load('/api/dashboard', render);`;
+load('api/dashboard', render);`;
 export const WEEKLY_SCRIPT =
   LOADER +
   `function render(data) {
@@ -260,7 +264,7 @@ export const WEEKLY_SCRIPT =
   JSON.stringify(dashboard.WEEKLY_EMPTY) +
   `;message.hidden = data.count !== 0;
 }
-load('/api/weekly', render);`;
+load('api/weekly', render);`;
 export const SCRIPTS: Record<dashboard.Ritual, string> = { daily: DAILY_SCRIPT, weekly: WEEKLY_SCRIPT };
 export const scriptHash = (script: string): string => sha256Base64(script);
 export const CSP =

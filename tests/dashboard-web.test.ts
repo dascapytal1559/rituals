@@ -75,8 +75,8 @@ describe("dashboard web", () => {
 
   it("frontend has no record data or unsafe HTML sink", () => {
     for (const [ritual, name, url] of [
-      ["daily", "Daily rituals", "/api/dashboard"],
-      ["weekly", "Weekly review", "/api/weekly"],
+      ["daily", "Daily rituals", "api/dashboard"],
+      ["weekly", "Weekly review", "api/weekly"],
     ] as const) {
       const page = dashboardWeb.frontend(ritual);
       expect(page).toContain(`load('${url}', render)`);
@@ -87,9 +87,9 @@ describe("dashboard web", () => {
       expect(page).toContain(`<title>${name}</title>`);
       expect(count(page, "<select")).toBe(1);
       expect(page).toContain(
-        '<option value="/"' +
+        '<option value="./"' +
           (ritual === "daily" ? " selected" : "") +
-          '>Daily rituals</option><option value="/weekly"' +
+          '>Daily rituals</option><option value="weekly"' +
           (ritual === "weekly" ? " selected" : "") +
           ">Weekly review</option>",
       );
@@ -97,5 +97,21 @@ describe("dashboard web", () => {
     }
     expect(dashboardWeb.frontend("daily")).toContain("Date<span");
     expect(dashboardWeb.frontend("weekly")).toContain("Done this week");
+  });
+
+  it("live pages resolve every address relative to where they are mounted", () => {
+    // Tailscale Serve strips a path mount (/rituals) before proxying, so the server sees / either way; a root-anchored
+    // link, fetch or redirect in the page would leave the mount.
+    for (const ritual of ["daily", "weekly"] as const) {
+      const page = dashboardWeb.frontend(ritual);
+      expect(page.match(/(?:value|href|src|action)="[^"]*"/g)).toEqual(['value="./"', 'value="weekly"']);
+      expect(page).not.toMatch(/['"`]\/(?:api|weekly)/);
+      expect(page).not.toContain("location.href");
+    }
+    // Only the base page adds its missing trailing slash, before its first relative fetch.
+    const daily = dashboardWeb.SCRIPTS.daily;
+    expect(daily.startsWith("if (!location.pathname.endsWith('/')) history.replaceState(")).toBe(true);
+    expect(daily.indexOf("history.replaceState")).toBeLessThan(daily.indexOf("load('api/dashboard'"));
+    expect(dashboardWeb.SCRIPTS.weekly).not.toContain("history");
   });
 });

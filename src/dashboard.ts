@@ -412,7 +412,8 @@ export const RITUALS: ReadonlyArray<readonly [Ritual, string]> = [
   ["weekly", "Weekly review"],
 ];
 export const RITUAL_NAMES: Record<Ritual, string> = { daily: "Daily rituals", weekly: "Weekly review" };
-export const LIVE_PATHS: Record<Ritual, string> = { daily: "/", weekly: "/weekly" };
+// Relative to the app's base, so the live pages work at the root and under a Tailscale Serve path mount alike.
+export const LIVE_PATHS: Record<Ritual, string> = { daily: "./", weekly: "weekly" };
 export const SNAPSHOT_FILES: Record<Ritual, string> = { daily: "ritual-dashboard.html", weekly: "weekly-review.html" };
 export const CHEVRON =
   '<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
