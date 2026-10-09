@@ -4,14 +4,33 @@
 // export, restore and the reviewed migration are exactly those of the Python store; the same
 // database file carries over untouched. Everything here returns Effects; the SQLite connection is
 // an @effect/sql-sqlite-node client opened for the store's lifetime (a Scope).
-import { Context, Effect, FileSystem, Layer, Result, type Scope } from "effect";
+import { Context, Effect, FileSystem, Layer, Result, Schema, type Scope } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { SqlError } from "effect/sql/SqlError";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { applies, type ExceptionRow, isHabit, statusReport, TABLE_SQL, validateException } from "./applicability.ts";
+import {
+  applies,
+  dailyStatus,
+  type ExceptionRow,
+  isHabit,
+  period as ritualPeriod,
+  statusReport,
+  TABLE_SQL,
+  validateException,
+} from "./applicability.ts";
+import {
+  ATTACHMENT_SQL,
+  AttachmentRole,
+  attachmentApplies,
+  attachmentViews,
+  checkId,
+  fullCompletion,
+  type Attachment,
+  type AttachmentCheck,
+} from "./attachments.ts";
 import { dumps, isRecord, pack, sameJson, sha } from "./encoding.ts";
 import { type ApplicabilityConflict, reject, RequiresReview } from "./errors.ts";
 import {
@@ -55,7 +74,7 @@ export const WEEKLY_SQL = `CREATE TABLE weekly_reviews(
  week_start TEXT PRIMARY KEY CHECK(date(week_start) IS week_start AND strftime('%w',week_start)='1'),
  answer TEXT NOT NULL CHECK(length(trim(answer))>0)
 );`;
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 const VERSION_1_TABLES = [
   "rituals",
   "workouts",
@@ -69,6 +88,13 @@ export const TABLES_BY_VERSION: Record<number, ReadonlyArray<string>> = {
   1: VERSION_1_TABLES,
   2: [...VERSION_1_TABLES, "applicability_exceptions"],
   3: [...VERSION_1_TABLES, "applicability_exceptions", "weekly_reviews"],
+  4: [
+    ...VERSION_1_TABLES,
+    "applicability_exceptions",
+    "weekly_reviews",
+    "ritual_attachments",
+    "ritual_attachment_checks",
+  ],
 };
 export const TABLES = TABLES_BY_VERSION[SCHEMA_VERSION] as ReadonlyArray<string>;
 export const BOOLS = ["magnesium", "protein", "stretching", "journalling"] as const;
@@ -78,6 +104,8 @@ export const FIELDS: Record<string, ReadonlyArray<string>> = {
   reminders: ["id", "text", "due_at", "status"],
   applicability_exceptions: ["id", "habit", "start_date", "end_date", "reason"],
   weekly_reviews: ["week_start", "answer"],
+  ritual_attachments: ["id", "ritual", "text", "start_date", "end_date", "role"],
+  ritual_attachment_checks: ["id", "attachment_id", "date", "done"],
 };
 const KEYS: Record<string, string> = { rituals: "date", weekly_reviews: "week_start" };
 export const WRITES: ReadonlySet<string> = new Set([
@@ -88,6 +116,8 @@ export const WRITES: ReadonlySet<string> = new Set([
   "reminder_mark",
   "exception_add",
   "weekly_put",
+  "attachment_add",
+  "attachment_check",
 ]);
 const WEEKLY_NOTE = /^Weekly:\s*(\S.*?)\s*$/;
 const MIGRATION_REQUIRED = (version: number) =>
@@ -97,14 +127,22 @@ const ENTITY_OF_ADD: Record<string, string> = {
   workout_add: "workouts",
   reminder_add: "reminders",
   exception_add: "applicability_exceptions",
+  attachment_add: "ritual_attachments",
 };
-const ID_PREFIX: Record<string, string> = { workouts: "w_", reminders: "r_", applicability_exceptions: "ae_" };
+const ID_PREFIX: Record<string, string> = {
+  workouts: "w_",
+  reminders: "r_",
+  applicability_exceptions: "ae_",
+  ritual_attachments: "ra_",
+};
 const REQUIRED: Record<string, ReadonlyArray<string>> = {
   rituals: ["date", "checkins"],
   workouts: ["id", "date", "type", "details"],
   reminders: ["id", "text", "due_at", "status"],
   applicability_exceptions: FIELDS.applicability_exceptions as ReadonlyArray<string>,
   weekly_reviews: FIELDS.weekly_reviews as ReadonlyArray<string>,
+  ritual_attachments: FIELDS.ritual_attachments as ReadonlyArray<string>,
+  ritual_attachment_checks: FIELDS.ritual_attachment_checks as ReadonlyArray<string>,
 };
 
 export type Row = Record<string, unknown>;
@@ -159,7 +197,16 @@ export const validated = (entity: string, row: unknown, complete = false): Effec
     for (const [k, v] of Object.entries(row)) {
       if (k === "date") out[k] = yield* date(v);
       else if (k === "id") out[k] = yield* text(v, "id", 180);
-      else if (isBoolField(k)) {
+      else if (k === "attachment_id") out[k] = yield* text(v, k, 180);
+      else if (k === "ritual") out[k] = yield* text(v, k, 120);
+      else if (k === "role") {
+        const role = Schema.decodeUnknownResult(AttachmentRole)(v);
+        if (Result.isFailure(role)) return yield* Effect.fail(reject("role must be required_check or reminder_only"));
+        out[k] = role.success;
+      } else if (k === "done") {
+        if (v !== null && typeof v !== "boolean")
+          return yield* Effect.fail(reject("done must be true, false, or null"));
+      } else if (isBoolField(k)) {
         if (v !== null && typeof v !== "boolean")
           return yield* Effect.fail(reject(`${k} must be true, false, or null`));
       } else if (k === "checkins") {
@@ -182,7 +229,7 @@ export const validated = (entity: string, row: unknown, complete = false): Effec
       } else if (k === "habit") {
         if (!isHabit(v)) return yield* Effect.fail(reject("Unknown habit"));
       } else if (k === "start_date" || k === "end_date") {
-        out[k] = k === "start_date" && v === null ? null : yield* date(v);
+        out[k] = v === null && (k === "start_date" || entity === "ritual_attachments") ? null : yield* date(v);
       } else if (k === "reason") out[k] = yield* text(v, "reason", 2000);
       else if (k === "week_start") {
         const day = yield* date(v);
@@ -197,6 +244,13 @@ export const validated = (entity: string, row: unknown, complete = false): Effec
       const required = REQUIRED[entity] as ReadonlyArray<string>;
       if (!required.every((k) => k in out)) return yield* Effect.fail(reject("Required record fields are missing"));
       if (entity === "applicability_exceptions") yield* Effect.fromResult(validateException(out, []));
+      if (
+        entity === "ritual_attachments" &&
+        (out.start_date === null || (out.end_date !== null && (out.start_date as string) > (out.end_date as string)))
+      )
+        return yield* Effect.fail(reject("Attachment date range must have an inclusive start and a valid end"));
+      if (entity === "ritual_attachment_checks" && out.id !== checkId(out.attachment_id as string, out.date as string))
+        return yield* Effect.fail(reject("Attachment check identity must match attachment and logical date"));
     }
     return out;
   });
@@ -211,6 +265,7 @@ export const decode = (entity: string, row: Row | null | undefined): Row | null 
     obj.checkins = JSON.parse(obj.checkins as string);
     for (const k of BOOLS) obj[k] = obj[k] === null ? null : Boolean(obj[k]);
   }
+  if (entity === "ritual_attachment_checks") obj.done = obj.done === null ? null : Boolean(obj.done);
   return obj;
 };
 
@@ -309,7 +364,7 @@ export const openStore = (
       const inserts = Object.keys(TABLES_BY_VERSION)
         .map((v) => `\nINSERT INTO schema_migrations VALUES(${v},'${stamp}');`)
         .join("");
-      yield* sql.withTransaction(runScript(SCHEMA + TABLE_SQL + WEEKLY_SQL + inserts));
+      yield* sql.withTransaction(runScript(SCHEMA + TABLE_SQL + WEEKLY_SQL + ATTACHMENT_SQL + inserts));
     }
     let found = yield* versions;
     if (found.length === 1 && found[0] === 1 && !state.frozen) {
@@ -325,7 +380,7 @@ export const openStore = (
       );
       found = yield* versions;
     }
-    if (!["1", "1,2", "1,2,3"].includes(found.join(","))) {
+    if (!["1", "1,2", "1,2,3", "1,2,3,4"].includes(found.join(","))) {
       return yield* Effect.fail(reject("Unsupported schema version; explicit migration required"));
     }
     state.schemaVersion = found[found.length - 1] as number;
@@ -392,7 +447,13 @@ export const openStore = (
 
     const checkApplicability = (entity: string, row: Row): Effect.Effect<void, StoreError> =>
       Effect.gen(function* () {
-        if (entity === "applicability_exceptions") {
+        if (entity === "ritual_attachment_checks") {
+          const item = yield* get("ritual_attachments", row.attachment_id as string);
+          if (!item || !attachmentApplies(item as unknown as Attachment, item.ritual as string, row.date as string))
+            return yield* Effect.fail(reject("Attachment does not apply to that logical date"));
+          if (item.role !== "required_check")
+            return yield* Effect.fail(reject("Reminder-only attachment has no tick or required response"));
+        } else if (entity === "applicability_exceptions") {
           const others = (yield* exceptions).filter((r) => r.id !== row.id);
           yield* Effect.fromResult(validateException(row, others as unknown as Array<Row>));
           const habit = row.habit as string;
@@ -516,12 +577,17 @@ export const openStore = (
       const backupPath = yield* backup;
       const moved = yield* sql.withTransaction(
         Effect.gen(function* () {
-          if ((yield* versions).join(",") !== "1,2") {
+          if ((yield* versions).at(-1) !== state.schemaVersion) {
             return yield* Effect.fail(reject("Schema changed during migration; reopen and retry"));
           }
-          yield* runScript(WEEKLY_SQL);
-          const result = yield* moveWeeklyNotes("migration:3", "Schema migration 3");
-          yield* sql`INSERT INTO schema_migrations VALUES(3,${stampZ(yield* nowMicros)})`;
+          let result: Array<{ date: string; week_start: string; lines: number }> = [];
+          if (state.schemaVersion < 3) {
+            yield* runScript(WEEKLY_SQL);
+            result = yield* moveWeeklyNotes("migration:3", "Schema migration 3");
+            yield* sql`INSERT INTO schema_migrations VALUES(3,${stampZ(yield* nowMicros)})`;
+          }
+          yield* runScript(ATTACHMENT_SQL);
+          yield* sql`INSERT INTO schema_migrations VALUES(4,${stampZ(yield* nowMicros)})`;
           return result;
         }),
       );
@@ -546,6 +612,19 @@ export const openStore = (
       }>`SELECT request_hash,response_json FROM changes WHERE request_id=${requestId}`.pipe(
         Effect.map((rows) => rows[0] ?? null),
       );
+
+    const attachmentRecords = Effect.gen(function* () {
+      if (state.schemaVersion < 4) return { items: [] as Array<Attachment>, checks: [] as Array<AttachmentCheck> };
+      const items = (yield* sql<Attachment>`SELECT * FROM ritual_attachments ORDER BY ritual,start_date,id`).map(
+        (r) => ({ ...r }),
+      );
+      const checks: Array<AttachmentCheck> = [];
+      for (const row of yield* sql<Row>`SELECT * FROM ritual_attachment_checks ORDER BY date,id`) {
+        const decoded = decode("ritual_attachment_checks", row) as unknown as AttachmentCheck;
+        checks.push({ ...decoded, revision: yield* revision("ritual_attachment_checks", decoded.id) });
+      }
+      return { items, checks };
+    });
 
     const mutate = (req: Row): Effect.Effect<unknown, StoreError> =>
       Effect.gen(function* () {
@@ -603,6 +682,21 @@ export const openStore = (
               // default cannot replace a check-in saved by another agent or an explicit patch.
               if (journalEntryAt !== null && (after.checkins as Array<string>).length === 0)
                 after.checkins = [journalEntryAt];
+            } else if (op === "attachment_check") {
+              entity = "ritual_attachment_checks";
+              const attachmentId = yield* text(req.attachment_id, "attachment_id", 180);
+              const day = yield* date(req.date);
+              key = checkId(attachmentId, day);
+              before = yield* get(entity, key);
+              after = yield* validated(
+                entity,
+                { id: key, attachment_id: attachmentId, date: day, done: req.done },
+                true,
+              );
+              if (before && before.done !== null && before.done !== after.done)
+                return yield* Effect.fail(
+                  reject("Changing a recorded check requires correct with expected_revision and reason"),
+                );
             } else if (op === "weekly_put") {
               // Like notes, a further answer for the same week is appended; changing earlier words needs correct.
               entity = "weekly_reviews";
@@ -644,8 +738,38 @@ export const openStore = (
               if (Object.keys(patch).length === 0 || keyOf(entity) in patch) {
                 return yield* Effect.fail(reject("Cannot change record identity; correct fields only"));
               }
+              if (entity === "ritual_attachments") {
+                if (Object.keys(patch).some((k) => k !== "text" && k !== "end_date"))
+                  return yield* Effect.fail(
+                    reject(
+                      "Attachment ritual, start and role preserve historical scope; create a new attachment for a new scope",
+                    ),
+                  );
+                if ("end_date" in patch && patch.end_date !== before.end_date) {
+                  const today = (yield* Effect.fromResult(ritualPeriod(stampZ(yield* nowMicros)))).active_date;
+                  if (
+                    (before.end_date !== null && (before.end_date as string) < today) ||
+                    (patch.end_date !== null && (patch.end_date as string) < today)
+                  )
+                    return yield* Effect.fail(
+                      reject(
+                        "End-date correction cannot erase historical scope or reactivate an expired attachment; create a new attachment",
+                      ),
+                    );
+                  if (patch.end_date !== null) {
+                    const later =
+                      yield* sql`SELECT id FROM ritual_attachment_checks WHERE attachment_id=${key} AND date>${patch.end_date as string} LIMIT 1`;
+                    if (later.length)
+                      return yield* Effect.fail(reject("End-date correction would exclude a recorded check"));
+                  }
+                }
+              }
+              if (entity === "ritual_attachment_checks" && Object.keys(patch).some((k) => k !== "done"))
+                return yield* Effect.fail(reject("Cannot change an attachment check's identity or logical date"));
               after = { ...before, ...patch };
             }
+            if (entity === "ritual_attachments" || entity === "ritual_attachment_checks")
+              after = yield* validated(entity, after, true);
             yield* checkApplicability(entity, after);
             yield* save(entity, after, before !== null);
             return yield* recordChange(requestId, requestHash, op, entity, key, before, after, source, reason, {
@@ -830,7 +954,7 @@ export const openStore = (
             const collected: Record<string, Array<Row>> = {};
             for (const table of state.tableNames) {
               const rows = yield* sql.unsafe<Row>(`SELECT * FROM ${table} ORDER BY ${keyOf(table)}`);
-              collected[table] = rows.map((r) => (table === "rituals" ? (decode(table, r) as Row) : { ...r }));
+              collected[table] = rows.map((r) => decode(table, r) as Row);
             }
             return collected;
           }),
@@ -901,6 +1025,9 @@ export const openStore = (
             for (const table of TABLES) for (const row of tables[table] ?? []) yield* save(table, row);
             for (const row of yield* exceptions)
               yield* checkApplicability("applicability_exceptions", row as unknown as Row);
+            const checks = yield* sql<Row>`SELECT * FROM ritual_attachment_checks`;
+            for (const check of checks)
+              yield* checkApplicability("ritual_attachment_checks", decode("ritual_attachment_checks", check) as Row);
             // An older snapshot gets the same weekly move as an upgraded store, so its data matches this schema.
             if ((snap.schema_version as number) < 3) {
               yield* moveWeeklyNotes(
@@ -965,6 +1092,46 @@ export const openStore = (
               records.push({ ...r, revision: yield* revision("applicability_exceptions", r.id) });
             return { records };
           }
+          case "ritual_attachments": {
+            const ritual = yield* text(req.ritual, "ritual", 120);
+            const records: Array<Row> = [];
+            for (const item of (yield* attachmentRecords).items.filter((candidate) => candidate.ritual === ritual))
+              records.push({ ...item, revision: yield* revision("ritual_attachments", item.id) });
+            return { records };
+          }
+          case "ritual_checklist": {
+            const day = yield* date(req.date);
+            const ritual = yield* text(req.ritual, "ritual", 120);
+            const asOf = yield* instant("as_of" in req ? req.as_of : stampZ(yield* nowMicros));
+            return yield* sql.withTransaction(
+              Effect.gen(function* () {
+                const context = yield* Effect.fromResult(ritualPeriod(asOf));
+                const original = yield* get("rituals", day);
+                const activity = yield* sql`SELECT id FROM workouts WHERE date=${day} LIMIT 1`;
+                const core = yield* Effect.fromResult(
+                  dailyStatus(
+                    day,
+                    (original ?? undefined) as { date: string } | undefined,
+                    activity.length > 0,
+                    yield* exceptions,
+                    context,
+                  ),
+                );
+                const { items, checks } = yield* attachmentRecords;
+                const attached = attachmentViews(items, checks, ritual, day);
+                return {
+                  ...context,
+                  ...core,
+                  ritual,
+                  has_ritual: ritual === "evening" && core.has_ritual,
+                  checkins: ritual === "evening" ? (original?.checkins ?? []) : [],
+                  habits: ritual === "evening" ? core.habits : {},
+                  attachments: attached,
+                  full_completion: fullCompletion(ritual === "evening" ? core : null, attached),
+                };
+              }),
+            );
+          }
           case "ritual_status": {
             const [start, end] = yield* dateRange(req);
             const asOf = yield* instant("as_of" in req ? req.as_of : stampZ(yield* nowMicros));
@@ -976,9 +1143,24 @@ export const openStore = (
                   date: string;
                   type: string;
                 }>`SELECT id,date,type FROM workouts`).map((r) => ({ ...r }));
-                return yield* Effect.fromResult(
+                const report = yield* Effect.fromResult(
                   statusReport(rituals as Array<{ date: string }>, workouts, yield* exceptions, asOf, start, end),
                 );
+                const { items, checks } = yield* attachmentRecords;
+                const includeAttachments = (row: typeof report.active_period) => {
+                  const attached = attachmentViews(items, checks, "evening", row.date);
+                  return {
+                    ...row,
+                    ritual: "evening",
+                    attachments: attached,
+                    full_completion: fullCompletion(row, attached),
+                  };
+                };
+                return {
+                  ...report,
+                  records: report.records.map(includeAttachments),
+                  active_period: includeAttachments(report.active_period),
+                };
               }),
             );
           }

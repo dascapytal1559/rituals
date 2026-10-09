@@ -16,7 +16,14 @@ import { ROOT } from "./root.ts";
 export type ClientError = StoreError | StorageUnavailable;
 
 const MISSING = "Authoritative Mac database is unavailable; no empty replacement was created";
-const REFRESHES: ReadonlySet<string> = new Set([...WRITES, "import", "restore", "ritual_status", "reminders"]);
+const REFRESHES: ReadonlySet<string> = new Set([
+  ...WRITES,
+  "import",
+  "restore",
+  "ritual_status",
+  "ritual_checklist",
+  "reminders",
+]);
 const SAVES: ReadonlySet<string> = new Set([...WRITES, "import", "restore"]);
 const STORAGE_PROBLEMS = ["locked", "unable to open", "disk i/o", "readonly", "full"];
 

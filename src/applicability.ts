@@ -208,6 +208,36 @@ export interface StatusReport extends Period {
   readonly by_habit: Record<Habit, Completion>;
 }
 
+/** Derive a requested logical day without creating an observation or changing coverage. */
+export const dailyStatus = (
+  day: string,
+  original: RitualLike | undefined,
+  hasActivity: boolean,
+  exceptions: ReadonlyArray<ExceptionRow>,
+  context: Period,
+): Result.Result<StatusRow, ApplicabilityConflict | RequiresReview> => {
+  const habits = {} as Record<Habit, Cell>;
+  for (const habit of HABITS) {
+    const cell = derive(
+      habit,
+      day,
+      original?.[habit === "planks" ? "plank_seconds" : habit],
+      exceptions,
+      context.closed_through,
+    );
+    if (Result.isFailure(cell)) return Result.fail(cell.failure);
+    habits[habit] = cell.success;
+  }
+  return Result.succeed({
+    date: day,
+    has_ritual: original !== undefined,
+    has_activity: hasActivity,
+    period: day <= context.closed_through ? "closed" : day === context.active_date ? "open" : "upcoming",
+    closes_at: closesAt(day),
+    habits,
+  });
+};
+
 export const statusReport = (
   rituals: ReadonlyArray<RitualLike>,
   workouts: ReadonlyArray<{ readonly date: string }>,
@@ -222,29 +252,7 @@ export const statusReport = (
   const raw = new Map(rituals.map((r) => [r.date, r] as const));
   const activityDates = new Set(workouts.map((w) => w.date));
   const known = [...new Set([...raw.keys(), ...activityDates])].toSorted();
-  const row = (day: string): Result.Result<StatusRow, ApplicabilityConflict | RequiresReview> => {
-    const original: Record<string, unknown> = raw.get(day) ?? {};
-    const habits = {} as Record<Habit, Cell>;
-    for (const habit of HABITS) {
-      const cell = derive(
-        habit,
-        day,
-        original[habit === "planks" ? "plank_seconds" : habit],
-        exceptions,
-        context.closed_through,
-      );
-      if (Result.isFailure(cell)) return Result.fail(cell.failure);
-      habits[habit] = cell.success;
-    }
-    return Result.succeed({
-      date: day,
-      has_ritual: raw.has(day),
-      has_activity: activityDates.has(day),
-      period: day <= context.closed_through ? "closed" : day === context.active_date ? "open" : "upcoming",
-      closes_at: closesAt(day),
-      habits,
-    });
-  };
+  const row = (day: string) => dailyStatus(day, raw.get(day), activityDates.has(day), exceptions, context);
   const records: Array<StatusRow> = [];
   if (known.length > 0) {
     const firstKnown = known[0] as string;

@@ -43,10 +43,13 @@ TypeScript runs directly on Node.js 24 (no build step: `erasableSyntaxOnly`, `.t
 - Workouts retain free-text details. Distinct active days and workout counts differ. Reminders are independent; a scheduled review doesn't replace earlier explicit timing. Querying due items doesn't deliver them. Delivery and completion are separate states.
 - Notes retain topics and chess-clock notation. A weekly review answer is its own record: `weekly_put` with `week_start` = the Monday of the Monday-to-Sunday week it reviews (never in notes); a further answer for that week appends, and changing earlier words needs `correct`. Preserve original legacy midday checkpoints separately; never turn them into new evening check-ins.
 - Dated history notes about specific past records are in LOCAL.md; do not rewrite those records.
+- Temporary ritual attachments have their own definitions and date-keyed nullable answers, not core columns or standalone reminders. Use `ritual_checklist` with explicit ritual identity/date or the enriched `ritual_status` to present the whole ritual. Required checks participate in `full_completion.complete`; reminder-only items have no tick. Core rates and dashboard stay core-only. Expiry excludes future dates, never removes historical unanswered checks; do not invent earlier answers or extend expired contracts. See HANDOFF.md for writes, guarded corrections and offline replay.
 
 ## Routine behavior
 
 The assistant's schedule (check-in invitations, checklists, weekly questions) is per installation and lives in LOCAL.md. Everywhere: respect earlier reports, no minimum duration, lectures, scorekeeping or schedule announcements, and do not log a scheduled invitation as an observation.
+
+An invitation/checklist includes applicable attachments in the same ritual message. Claim the full ritual complete only from `full_completion.complete`, after both applicable core habits and required attachments are done; a temporary check report does not establish check-in. Noon may show applicable reminder-only items without asking for a tick. Query historical logical dates for unresolved old checks without creating new expired prompts or schedules.
 
 ## Offline, backups and UI
 

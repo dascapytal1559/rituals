@@ -41,6 +41,8 @@ Send one JSON object on stdin to bin/ritualctl:
 {"op":"rituals","from":"2026-10-01","to":"2026-10-03"}
 {"op":"history","entity":"rituals","id":"2026-10-03"}
 {"op":"ritual_status","from":"2026-09-01","to":"2026-10-03"}
+{"op":"ritual_checklist","ritual":"evening","date":"2026-10-03"}
+{"op":"ritual_attachments","ritual":"evening"}
 {"op":"applicability_exceptions"}
 {"op":"workouts","from":"2026-09-01","to":"2026-09-30","group_by":"week"}
 {"op":"workouts","from":"2026-09-01","to":"2026-09-30","group_by":"month"}
@@ -55,6 +57,27 @@ Use actual requested dates/as_of; omit as_of for current-time behavior. Rituals/
 ## Writes: templates, not real reports
 
 Replace every example value with an established user report before production use. Every action needs stable request_id and source_text containing verbatim words, original message ID, receipt instant, occurrence qualification and disclosed date inference. Omitted fields remain intact. An ordinary completion report does not establish check-in; authorized journal defaults use the dedicated option below.
+
+### Temporary items attached to a ritual
+
+Use an explicit ritual identity (`evening` names the existing daily core ritual), logical date and inclusive configured start/end. Other identities can carry their own attached items without using evening core/check-ins. End null means ongoing only when explicitly requested. Role `required_check` needs a dated explicit answer; `reminder_only` belongs in the ritual/review message but has no tick. There is no permanent dashboard column or effect on core completion percentages.
+
+Fictional setup and answer (replace with the authorized scope and actual report):
+
+```json
+{"op":"attachment_add","record":{"id":"fictional-temporary-check","ritual":"evening","text":"Fictional temporary check","start_date":"2027-02-01","end_date":"2027-02-07","role":"required_check"},"request_id":"ORIGINAL_SETUP_ID:attachment","source_text":"Exact authorized setup, source ID and qualified receipt; no answer inferred."}
+{"op":"attachment_check","attachment_id":"fictional-temporary-check","date":"2027-02-03","done":true,"request_id":"ORIGINAL_REPORT_ID:attachment:2027-02-03","source_text":"Exact answer, source ID, original receipt and disclosed logical date; actual occurrence unknown."}
+```
+
+`done` is true/false/null; absence/null remains unreported even after expiry. It never becomes a check-in or another habit. Same request ID/payload replays safely; changed payload with the same ID fails. A later changed nonnull answer uses `correct`, entity `ritual_attachment_checks`, id `check_id` from the checklist, current attachment-check revision, reason and fresh source/action ID. Only done can change; preserve identity/date and history. Do not infer earlier dates from a latest answer.
+
+Definitions are audited and can use guarded `correct` for text or a future-only end-date adjustment. Ritual identity/start/role cannot silently rewrite historical scope; create a new definition for a new phase. End-date corrections cannot remove historical applicability, reactivate an expired scope or exclude recorded answers. Expiry never extends itself. Do not extend/recreate a finished contract without a new explicit request.
+
+Always query `ritual_checklist` before a ritual invitation or completion reply. Its `attachments` contain applicable required checks and reminder-only items, with response requirements, exact state and check revision. Use `full_completion.complete` for the whole ritual; `remaining_core` and `remaining_attached` explain partial completion. `ritual_status` adds the same attachment/full-completion fields to each returned logical day and active period, leaving core `completion`/`by_habit` unchanged. Raw `rituals` records and core dashboard percentages alone do not establish full ritual completion.
+
+Queries use the supplied logical date rather than wall-clock expiry: a late historical answer is accepted inside that contract's range, and an old unanswered check remains readable after the contract ends. Outside the range the attachment is absent. This does not authorize fresh expired nudges; parent owns scheduling and delivery. A query/invitation is not a report.
+
+The existing `--enqueue`, `--replay` and unavailable-Mac contract apply to both attachment writes. Preserve exact prepared payload/ID, original receipt and logical date; replay stops on conflicts. Queue setup before its dependent answer. Don't claim a database save while merely queued, create an empty replacement store, or infer delivery from a query.
 
 Partial habit report:
 ```json
@@ -183,6 +206,8 @@ bin/ritualctl --migrate
 ```
 
 `--migrate` takes its own consistent backup first (path and sha256 in the result), applies the change in one transaction, audits every moved record in `changes`, regenerates the snapshots and is a no-op once applied. It refuses on a frozen backup copy. Version 3 adds `weekly_reviews` and moves every whole `Weekly: ...` line out of ritual notes into the week (Monday) of that ritual date, dropping the prefix; the result lists the dates and weeks moved. Restoring an older export into a current store applies the same move. A new store from `--init` starts at the current schema.
+
+Version 4 adds only `ritual_attachments` (identity, ritual, text, start/end, role) and `ritual_attachment_checks` (identity, attachment, logical date, nullable done). Existing records stay unchanged and no historical answers are created. Existing version 3 stores require explicit `--migrate` with the edit claim and incoming reports held; older versions get the existing weekly move first. Exports include config, answers and exact audit/revision history; restoring older exports adds empty attachment tables without invented checks. No NAS sync or network/service changes are part of migration.
 
 ## Setting up the dashboard service (new installation)
 

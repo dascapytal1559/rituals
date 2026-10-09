@@ -216,7 +216,13 @@ layer(NodeServices.layer, { excludeTestServices: true })("applicability store", 
       const { store } = yield* setup;
       const snapshot = (yield* store.request({ op: "export" })) as any;
       snapshot.schema_version = 1;
-      for (const table of ["applicability_exceptions", "weekly_reviews"]) delete snapshot.tables[table];
+      for (const table of [
+        "applicability_exceptions",
+        "weekly_reviews",
+        "ritual_attachments",
+        "ritual_attachment_checks",
+      ])
+        delete snapshot.tables[table];
       snapshot.data_sha256 = sha(pack(snapshot.tables));
       const other = yield* openStore(yield* tempDirectory);
       const restored = (yield* other.request({ op: "restore", snapshot })) as any;
