@@ -257,7 +257,7 @@ layer(NodeServices.layer, { excludeTestServices: true })("ritual attachments", (
       yield* first.request(item());
       yield* first.request(check());
       const snapshot = (yield* first.request({ op: "export" })) as any;
-      expect(snapshot.schema_version).toBe(4);
+      expect(snapshot.schema_version).toBe(5);
       const restored = yield* openStore(yield* tempDirectory);
       yield* restored.request({ op: "restore", snapshot });
       expect(((yield* restored.request({ op: "export" })) as any).data_sha256).toBe(snapshot.data_sha256);
@@ -346,14 +346,14 @@ layer(NodeServices.layer, { excludeTestServices: true })("ritual attachments", (
       const before = (yield* store.request({ op: "export" })) as any;
       expect((yield* store.request(checklist()).pipe(Effect.flip)).message).toMatch(/--migrate/);
       const result = yield* store.migrate;
-      expect([result.from_version, result.schema_version]).toEqual([3, 4]);
+      expect([result.from_version, result.schema_version]).toEqual([3, 5]);
       expect(
         inspect(result.backup!, (db) => (db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as any).v),
       ).toBe(3);
       const after = (yield* store.request({ op: "export" })) as any;
       for (const name of Object.keys(before.tables)) expect(after.tables[name]).toEqual(before.tables[name]);
       expect(after.tables.ritual_attachment_checks).toEqual([]);
-      expect(yield* store.migrate).toEqual({ migrated: false, schema_version: 4 });
+      expect(yield* store.migrate).toEqual({ migrated: false, schema_version: 5 });
       expect(fs.readdirSync(path.join(dir, "backups"))).toHaveLength(1);
     }),
   );

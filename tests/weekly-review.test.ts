@@ -48,7 +48,7 @@ layer(NodeServices.layer, { excludeTestServices: true })("weekly record", (it) =
       const tmp = yield* tempDirectory;
       const store = yield* openStore(tmp);
       const status = (yield* store.request({ op: "status" })) as any;
-      expect([status.schema_version, status.migration_required, status.counts.weekly_reviews]).toEqual([4, false, 0]);
+      expect([status.schema_version, status.migration_required, status.counts.weekly_reviews]).toEqual([5, false, 0]);
       expect(fs.existsSync(path.join(tmp, "backups"))).toBe(false);
     }),
   );
@@ -167,7 +167,7 @@ layer(NodeServices.layer, { excludeTestServices: true })("weekly migration", (it
           }
           expect(((yield* store.request({ op: "export" })) as any).schema_version).toBe(2);
           const result = yield* store.migrate;
-          expect([result.migrated, result.from_version, result.schema_version]).toEqual([true, 2, 4]);
+          expect([result.migrated, result.from_version, result.schema_version]).toEqual([true, 2, 5]);
           expect(result.moved_weekly_answers).toEqual([
             { date: "2026-09-20", week_start: "2026-09-14", lines: 1 },
             { date: "2026-09-27", week_start: "2026-09-21", lines: 1 },
@@ -210,7 +210,7 @@ layer(NodeServices.layer, { excludeTestServices: true })("weekly migration", (it
           })) as Array<any>;
           expect([moved.length, moved[0].action]).toEqual([1, "migrate"]);
           expect(moved[0].source_text).toContain("2026-09-27");
-          expect(yield* store.migrate).toEqual({ migrated: false, schema_version: 4 });
+          expect(yield* store.migrate).toEqual({ migrated: false, schema_version: 5 });
           expect(listFiles(path.join(folder, "backups"), ".sqlite3")).toHaveLength(1);
           // Normal writes resume and keep the revision guard working after the move.
           expect(
@@ -220,7 +220,7 @@ layer(NodeServices.layer, { excludeTestServices: true })("weekly migration", (it
         }),
       );
       const again = yield* openStore(folder);
-      expect([again.schemaVersion(), again.migrationRequired()]).toEqual([4, false]);
+      expect([again.schemaVersion(), again.migrationRequired()]).toEqual([5, false]);
     }),
   );
 

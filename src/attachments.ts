@@ -2,9 +2,11 @@
 import { Schema } from "effect";
 import type { StatusRow } from "./applicability.ts";
 import { pack, sha } from "./encoding.ts";
+import { weekday } from "./instants.ts";
 
 export const AttachmentRole = Schema.Literals(["required_check", "reminder_only"]);
 export type AttachmentRole = typeof AttachmentRole.Type;
+export const AttachmentWeekday = Schema.NullOr(Schema.Literals([1, 2, 3, 4, 5, 6, 7]));
 
 export interface Attachment {
   readonly id: string;
@@ -13,6 +15,8 @@ export interface Attachment {
   readonly start_date: string;
   readonly end_date: string | null;
   readonly role: AttachmentRole;
+  /** ISO weekday: Monday 1 through Sunday 7. Missing/null retains the legacy daily scope. */
+  readonly weekday?: typeof AttachmentWeekday.Type;
 }
 
 export interface AttachmentCheck {
@@ -41,11 +45,17 @@ CREATE TABLE ritual_attachment_checks(
  UNIQUE(attachment_id,date)
 );`;
 
+export const ATTACHMENT_WEEKDAY_SQL =
+  "ALTER TABLE ritual_attachments ADD COLUMN weekday INTEGER CHECK(weekday BETWEEN 1 AND 7);";
+
 export const checkId = (attachmentId: string, day: string): string =>
   "ac_" + sha(pack([attachmentId, day])).slice(0, 24);
 
 export const attachmentApplies = (item: Attachment, ritual: string, day: string): boolean =>
-  item.ritual === ritual && item.start_date <= day && (item.end_date === null || day <= item.end_date);
+  item.ritual === ritual &&
+  item.start_date <= day &&
+  (item.end_date === null || day <= item.end_date) &&
+  (item.weekday === undefined || item.weekday === null || weekday(day) + 1 === item.weekday);
 
 export const attachmentViews = (
   items: ReadonlyArray<Attachment>,
@@ -59,6 +69,7 @@ export const attachmentViews = (
       const check = checks.find((row) => row.attachment_id === item.id && row.date === day);
       return {
         ...item,
+        weekday: item.weekday ?? null,
         date: day,
         check_id: item.role === "required_check" ? checkId(item.id, day) : null,
         done: check?.done ?? null,

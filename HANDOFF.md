@@ -62,6 +62,8 @@ Replace every example value with an established user report before production us
 
 Use an explicit ritual identity (`evening` names the existing daily core ritual), logical date and inclusive configured start/end. Other identities can carry their own attached items without using evening core/check-ins. End null means ongoing only when explicitly requested. Role `required_check` needs a dated explicit answer; `reminder_only` belongs in the ritual/review message but has no tick. There is no permanent dashboard column or effect on core completion percentages.
 
+Optional `weekday` restricts the attachment to one ISO weekday (Monday 1 through Sunday 7); omitted/null retains the existing daily date-range behavior. A Sunday weekly check uses `ritual:"evening", weekday:7`, its authorized start date and end null when no end was given. It appears only on applicable logical Sundays, including an after-midnight continuation of that Sunday. Each answer uses that Sunday's logical date; the reviewed week is the Monday-to-Sunday week ending there. Never infer an answer from food/activity mentions or the separate weekly reflection. Preserve the reflection question and store its answer with `weekly_put` as before. Recurrence changes require a new definition so prior scope/answers are not rewritten.
+
 Fictional setup and answer (replace with the authorized scope and actual report):
 
 ```json
@@ -208,6 +210,8 @@ bin/ritualctl --migrate
 `--migrate` takes its own consistent backup first (path and sha256 in the result), applies the change in one transaction, audits every moved record in `changes`, regenerates the snapshots and is a no-op once applied. It refuses on a frozen backup copy. Version 3 adds `weekly_reviews` and moves every whole `Weekly: ...` line out of ritual notes into the week (Monday) of that ritual date, dropping the prefix; the result lists the dates and weeks moved. Restoring an older export into a current store applies the same move. A new store from `--init` starts at the current schema.
 
 Version 4 adds only `ritual_attachments` (identity, ritual, text, start/end, role) and `ritual_attachment_checks` (identity, attachment, logical date, nullable done). Existing records stay unchanged and no historical answers are created. Existing version 3 stores require explicit `--migrate` with the edit claim and incoming reports held; older versions get the existing weekly move first. Exports include config, answers and exact audit/revision history; restoring older exports adds empty attachment tables without invented checks. No NAS sync or network/service changes are part of migration.
+
+Version 5 adds only nullable `ritual_attachments.weekday`, with ISO values 1–7. Explicit `--migrate` backs up first and preserves all original fields, answers, request hashes and audit/retry receipts; existing definitions default to null (daily date-range behavior). Version 4 exports restore with null weekday while preserving their original audit. Current exports retain weekly recurrence and separate Sunday answers. Frozen older backups remain read-only. This is configuration inside existing rituals, not another reminder or dashboard column.
 
 ## Setting up the dashboard service (new installation)
 

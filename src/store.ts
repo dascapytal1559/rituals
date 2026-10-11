@@ -23,7 +23,9 @@ import {
 } from "./applicability.ts";
 import {
   ATTACHMENT_SQL,
+  ATTACHMENT_WEEKDAY_SQL,
   AttachmentRole,
+  AttachmentWeekday,
   attachmentApplies,
   attachmentViews,
   checkId,
@@ -74,7 +76,7 @@ export const WEEKLY_SQL = `CREATE TABLE weekly_reviews(
  week_start TEXT PRIMARY KEY CHECK(date(week_start) IS week_start AND strftime('%w',week_start)='1'),
  answer TEXT NOT NULL CHECK(length(trim(answer))>0)
 );`;
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 const VERSION_1_TABLES = [
   "rituals",
   "workouts",
@@ -95,6 +97,13 @@ export const TABLES_BY_VERSION: Record<number, ReadonlyArray<string>> = {
     "ritual_attachments",
     "ritual_attachment_checks",
   ],
+  5: [
+    ...VERSION_1_TABLES,
+    "applicability_exceptions",
+    "weekly_reviews",
+    "ritual_attachments",
+    "ritual_attachment_checks",
+  ],
 };
 export const TABLES = TABLES_BY_VERSION[SCHEMA_VERSION] as ReadonlyArray<string>;
 export const BOOLS = ["magnesium", "protein", "stretching", "journalling"] as const;
@@ -104,7 +113,7 @@ export const FIELDS: Record<string, ReadonlyArray<string>> = {
   reminders: ["id", "text", "due_at", "status"],
   applicability_exceptions: ["id", "habit", "start_date", "end_date", "reason"],
   weekly_reviews: ["week_start", "answer"],
-  ritual_attachments: ["id", "ritual", "text", "start_date", "end_date", "role"],
+  ritual_attachments: ["id", "ritual", "text", "start_date", "end_date", "role", "weekday"],
   ritual_attachment_checks: ["id", "attachment_id", "date", "done"],
 };
 const KEYS: Record<string, string> = { rituals: "date", weekly_reviews: "week_start" };
@@ -141,7 +150,7 @@ const REQUIRED: Record<string, ReadonlyArray<string>> = {
   reminders: ["id", "text", "due_at", "status"],
   applicability_exceptions: FIELDS.applicability_exceptions as ReadonlyArray<string>,
   weekly_reviews: FIELDS.weekly_reviews as ReadonlyArray<string>,
-  ritual_attachments: FIELDS.ritual_attachments as ReadonlyArray<string>,
+  ritual_attachments: (FIELDS.ritual_attachments as ReadonlyArray<string>).filter((field) => field !== "weekday"),
   ritual_attachment_checks: FIELDS.ritual_attachment_checks as ReadonlyArray<string>,
 };
 
@@ -203,6 +212,10 @@ export const validated = (entity: string, row: unknown, complete = false): Effec
         const role = Schema.decodeUnknownResult(AttachmentRole)(v);
         if (Result.isFailure(role)) return yield* Effect.fail(reject("role must be required_check or reminder_only"));
         out[k] = role.success;
+      } else if (k === "weekday") {
+        const day = Schema.decodeUnknownResult(AttachmentWeekday)(v);
+        if (Result.isFailure(day)) return yield* Effect.fail(reject("weekday must be null or an ISO weekday 1–7"));
+        out[k] = day.success;
       } else if (k === "done") {
         if (v !== null && typeof v !== "boolean")
           return yield* Effect.fail(reject("done must be true, false, or null"));
@@ -364,7 +377,9 @@ export const openStore = (
       const inserts = Object.keys(TABLES_BY_VERSION)
         .map((v) => `\nINSERT INTO schema_migrations VALUES(${v},'${stamp}');`)
         .join("");
-      yield* sql.withTransaction(runScript(SCHEMA + TABLE_SQL + WEEKLY_SQL + ATTACHMENT_SQL + inserts));
+      yield* sql.withTransaction(
+        runScript(SCHEMA + TABLE_SQL + WEEKLY_SQL + ATTACHMENT_SQL + ATTACHMENT_WEEKDAY_SQL + inserts),
+      );
     }
     let found = yield* versions;
     if (found.length === 1 && found[0] === 1 && !state.frozen) {
@@ -380,7 +395,7 @@ export const openStore = (
       );
       found = yield* versions;
     }
-    if (!["1", "1,2", "1,2,3", "1,2,3,4"].includes(found.join(","))) {
+    if (!["1", "1,2", "1,2,3", "1,2,3,4", "1,2,3,4,5"].includes(found.join(","))) {
       return yield* Effect.fail(reject("Unsupported schema version; explicit migration required"));
     }
     state.schemaVersion = found[found.length - 1] as number;
@@ -586,8 +601,12 @@ export const openStore = (
             result = yield* moveWeeklyNotes("migration:3", "Schema migration 3");
             yield* sql`INSERT INTO schema_migrations VALUES(3,${stampZ(yield* nowMicros)})`;
           }
-          yield* runScript(ATTACHMENT_SQL);
-          yield* sql`INSERT INTO schema_migrations VALUES(4,${stampZ(yield* nowMicros)})`;
+          if (state.schemaVersion < 4) {
+            yield* runScript(ATTACHMENT_SQL);
+            yield* sql`INSERT INTO schema_migrations VALUES(4,${stampZ(yield* nowMicros)})`;
+          }
+          yield* runScript(ATTACHMENT_WEEKDAY_SQL);
+          yield* sql`INSERT INTO schema_migrations VALUES(5,${stampZ(yield* nowMicros)})`;
           return result;
         }),
       );
@@ -718,6 +737,7 @@ export const openStore = (
                 if (!("due_at" in values)) values.due_at = null;
                 if (!("status" in values)) values.status = "pending";
               }
+              if (entity === "ritual_attachments" && !("weekday" in values)) values.weekday = null;
               after = yield* validated(entity, values, true);
               key = after.id as string;
               before = yield* get(entity, key);
@@ -742,7 +762,7 @@ export const openStore = (
                 if (Object.keys(patch).some((k) => k !== "text" && k !== "end_date"))
                   return yield* Effect.fail(
                     reject(
-                      "Attachment ritual, start and role preserve historical scope; create a new attachment for a new scope",
+                      "Attachment ritual, start, role and weekday preserve historical scope; create a new attachment for a new scope",
                     ),
                   );
                 if ("end_date" in patch && patch.end_date !== before.end_date) {
@@ -1008,7 +1028,11 @@ export const openStore = (
         }
         // Validate shape before parameterized inserts. Never execute SQL from an export.
         for (const [table, rows] of Object.entries(tables)) {
-          const cols = (yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(${table})`)).map((r) => r.name);
+          const cols = (yield* sql.unsafe<{ name: string }>(`PRAGMA table_info(${table})`))
+            .map((r) => r.name)
+            .filter(
+              (name) => !(table === "ritual_attachments" && (snap.schema_version as number) < 5 && name === "weekday"),
+            );
           for (const row of rows) {
             const keys = Object.keys(row);
             if (keys.length !== cols.length || !cols.every((c) => keys.includes(c))) {
