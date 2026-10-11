@@ -759,12 +759,29 @@ export const openStore = (
                 return yield* Effect.fail(reject("Cannot change record identity; correct fields only"));
               }
               if (entity === "ritual_attachments") {
-                if (Object.keys(patch).some((k) => k !== "text" && k !== "end_date"))
+                if (Object.keys(patch).some((k) => k !== "text" && k !== "start_date" && k !== "end_date"))
                   return yield* Effect.fail(
                     reject(
-                      "Attachment ritual, start, role and weekday preserve historical scope; create a new attachment for a new scope",
+                      "Attachment ritual, role and weekday preserve historical scope; create a new attachment for a new scope",
                     ),
                   );
+                if ("start_date" in patch && patch.start_date !== before.start_date) {
+                  const today = (yield* Effect.fromResult(ritualPeriod(stampZ(yield* nowMicros)))).active_date;
+                  if (
+                    patch.start_date === null ||
+                    (before.start_date as string) < today ||
+                    (patch.start_date as string) <= (before.start_date as string)
+                  )
+                    return yield* Effect.fail(
+                      reject(
+                        "Start-date correction can only postpone an open/future start without erasing closed historical scope",
+                      ),
+                    );
+                  const earlier =
+                    yield* sql`SELECT id FROM ritual_attachment_checks WHERE attachment_id=${key} AND date<${patch.start_date as string} LIMIT 1`;
+                  if (earlier.length)
+                    return yield* Effect.fail(reject("Start-date correction would exclude a recorded check"));
+                }
                 if ("end_date" in patch && patch.end_date !== before.end_date) {
                   const today = (yield* Effect.fromResult(ritualPeriod(stampZ(yield* nowMicros)))).active_date;
                   if (

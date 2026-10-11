@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ATTACHMENT_SQL, checkId } from "../src/attachments.ts";
 import { TABLE_SQL } from "../src/applicability.ts";
+import { addDays, weekday } from "../src/instants.ts";
 import { pack, sha } from "../src/encoding.ts";
 import { enqueue, replay, call } from "../src/localClient.ts";
 import { SCHEMA, WEEKLY_SQL, openStore } from "../src/store.ts";
@@ -211,6 +212,110 @@ layer(NodeServices.layer, { excludeTestServices: true })("weekly attachment recu
         ((yield* store.request({ op: "weekly_reviews", from: "2026-10-05", to: "2026-10-11" })) as any).records[0]
           .answer,
       ).toBe("Fictional weekly activity mention");
+    }),
+  );
+
+  it.effect("an unanswered open weekly start can be postponed with the same identity, audit and exact retries", () =>
+    Effect.gen(function* () {
+      const store = yield* openStore(yield* tempDirectory);
+      const today = ((yield* store.request(checklist("2026-10-11"))) as any).active_date;
+      const next = addDays(today, 7);
+      const configured = { ...setup, record: { ...setup.record, start_date: today, weekday: weekday(today) + 1 } };
+      const first = (yield* store.request(configured)) as any;
+      yield* store.request(core(today));
+      expect(((yield* store.request(checklist(today))) as any).full_completion.complete).toBe(false);
+      const correction = {
+        op: "correct",
+        entity: "ritual_attachments",
+        id: setup.record.id,
+        patch: { start_date: next },
+        expected_revision: first.revision,
+        reason: "Explicit fictional next-week start correction",
+        request_id: "fictional-postpone-start",
+        source_text: "Fictional correction, not a check answer",
+      };
+      const corrected = (yield* store.request(correction)) as any;
+      expect(corrected.record).toEqual({ ...configured.record, start_date: next });
+      expect(((yield* store.request(correction)) as any).revision).toBe(corrected.revision);
+      expect(((yield* store.request(correction)) as any).replayed).toBe(true);
+      expect(((yield* store.request(configured)) as any).record.start_date).toBe(today);
+      const current = (yield* store.request(checklist(today))) as any;
+      expect(current.attachments).toEqual([]);
+      expect(current.full_completion.complete).toBe(true);
+      expect(current.checkins).toEqual([]);
+      expect(((yield* store.request(checklist(next))) as any).attachments[0]).toMatchObject({
+        done: null,
+        status: "unreported",
+      });
+      const history = (yield* store.request({
+        op: "history",
+        entity: "ritual_attachments",
+        id: setup.record.id,
+      })) as any;
+      expect(history).toHaveLength(2);
+      expect(JSON.parse(history[1].before_json).start_date).toBe(today);
+      expect(JSON.parse(history[1].after_json).start_date).toBe(next);
+      const exported = (yield* store.request({ op: "export" })) as any;
+      expect(exported.tables.ritual_attachments).toHaveLength(1);
+      expect(exported.tables.ritual_attachment_checks).toEqual([]);
+      const restored = yield* openStore(yield* tempDirectory);
+      yield* restored.request({ op: "restore", snapshot: exported });
+      expect(((yield* restored.request(checklist(today))) as any).attachments).toEqual([]);
+      expect(((yield* restored.request(correction)) as any).replayed).toBe(true);
+    }),
+  );
+
+  it.effect("start corrections reject earlier, closed, null and answered scope with no audit mutation", () =>
+    Effect.gen(function* () {
+      const store = yield* openStore(yield* tempDirectory);
+      const today = ((yield* store.request(checklist("2026-10-11"))) as any).active_date;
+      const first = (yield* store.request({
+        ...setup,
+        record: { ...setup.record, start_date: today, weekday: null },
+      })) as any;
+      const correction = {
+        op: "correct",
+        entity: "ritual_attachments",
+        id: setup.record.id,
+        expected_revision: first.revision,
+        reason: "Fictional rejected start change",
+        source_text: "Fictional source",
+      };
+      for (const start of [null, addDays(today, -1)])
+        expect(
+          (yield* store
+            .request({ ...correction, patch: { start_date: start }, request_id: "fictional-reject:" + start })
+            .pipe(Effect.flip)).message,
+        ).toMatch(/postpone/);
+      yield* store.request({ ...answer(today), done: null });
+      expect(
+        (yield* store
+          .request({ ...correction, patch: { start_date: addDays(today, 7) }, request_id: "fictional-exclude-answer" })
+          .pipe(Effect.flip)).message,
+      ).toMatch(/exclude a recorded check/);
+      const closed = (yield* store.request({
+        ...setup,
+        record: { ...setup.record, id: "fictional-closed", start_date: addDays(today, -7) },
+        request_id: "fictional-closed-setup",
+      })) as any;
+      expect(
+        (yield* store
+          .request({
+            ...correction,
+            id: "fictional-closed",
+            expected_revision: closed.revision,
+            patch: { start_date: addDays(today, 7) },
+            request_id: "fictional-erase-closed",
+          })
+          .pipe(Effect.flip)).message,
+      ).toMatch(/closed historical scope/);
+      const history = (yield* store.request({
+        op: "history",
+        entity: "ritual_attachments",
+        id: setup.record.id,
+      })) as any;
+      expect(history).toHaveLength(1);
+      expect(((yield* store.request(checklist(today))) as any).attachments[0].done).toBeNull();
     }),
   );
 
